@@ -18,6 +18,8 @@
   libxslt,
   libgbm,
   ninja,
+  ncurses,
+  python3,
   check,
   dbus,
   bash,
@@ -41,6 +43,10 @@ stdenv.mkDerivation {
       ./tools
     ];
   };
+
+  postPatch = ''
+    patchShebangs scripts/terminfo/build_terminfo.py
+  '';
 
   strictDeps = true;
   __structuredAttrs = true;
@@ -71,6 +77,8 @@ stdenv.mkDerivation {
     ninja
     docbook_xsl
     pkg-config
+    ncurses
+    python3
     libxslt
     docbook_xml_dtd_42
   ];
