@@ -1068,9 +1068,13 @@ int kmscon_vte_selection_copy(struct kmscon_vte *vte, char **out)
 
 /* keyboard */
 
+/* @keycode is an XKB keycode, the tables below use linux keycodes */
 static GhosttyKey keycode_to_key(uint16_t keycode)
 {
-	switch (keycode) {
+	if (keycode < INPUT_KEYCODE_OFFSET)
+		return GHOSTTY_KEY_UNIDENTIFIED;
+
+	switch (keycode - INPUT_KEYCODE_OFFSET) {
 	case KEY_ESC:
 		return GHOSTTY_KEY_ESCAPE;
 	case KEY_1:

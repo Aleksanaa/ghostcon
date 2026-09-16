@@ -52,9 +52,12 @@ enum input_modifier {
 /* keep in sync with the vte layer */
 #define INPUT_INVALID 0xffffffff
 
+/* XKB keycodes are linux keycodes shifted by this offset */
+#define INPUT_KEYCODE_OFFSET 8
+
 struct input_key_event {
 	bool handled;	   /* user-controlled, default is false */
-	uint16_t keycode;  /* linux keycode - KEY_* - linux/input.h */
+	uint16_t keycode;  /* XKB keycode, that is KEY_* + INPUT_KEYCODE_OFFSET */
 	uint32_t ascii;	   /* ascii keysym for @keycode */
 	unsigned int mods; /* active modifiers - input_modifier mask */
 

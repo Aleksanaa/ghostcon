@@ -253,7 +253,6 @@ void uxkb_dev_destroy(struct input_dev *dev)
 	dev->repeat_timer = NULL;
 }
 
-#define EVDEV_KEYCODE_OFFSET 8
 enum {
 	KEY_RELEASED = 0,
 	KEY_PRESSED = 1,
@@ -447,7 +446,7 @@ int uxkb_dev_process(struct input_dev *dev, uint16_t key_state, uint16_t code)
 
 	state = dev->state;
 	compose_state = dev->compose_state;
-	keycode = code + EVDEV_KEYCODE_OFFSET;
+	keycode = code + INPUT_KEYCODE_OFFSET;
 
 	/*
 	 * To summarize the following convoluted logic:

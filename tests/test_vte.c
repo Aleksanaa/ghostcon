@@ -295,6 +295,20 @@ static void test_selection(void)
 	kmscon_vte_free(vte);
 }
 
+static bool press(struct kmscon_vte *vte, uint16_t keycode, uint32_t ascii, uint32_t unicode,
+		  unsigned int mods)
+{
+	/* the input layer reports XKB keycodes, not raw evdev ones */
+	return kmscon_vte_handle_keyboard(vte, keycode + INPUT_KEYCODE_OFFSET, ascii, unicode,
+					  mods);
+}
+
+static void reset_sink(struct sink *sink)
+{
+	sink->len = 0;
+	sink->buf[0] = 0;
+}
+
 static void test_keyboard(void)
 {
 	struct kmscon_vte *vte;
@@ -302,37 +316,57 @@ static void test_keyboard(void)
 
 	vte = new_vte(&sink);
 
-	assert(kmscon_vte_handle_keyboard(vte, KEY_A, 'a', 'a', 0));
+	assert(press(vte, KEY_A, 'a', 'a', 0));
 	assert(!strcmp(sink.buf, "a"));
 
-	sink.len = 0;
-	sink.buf[0] = 0;
-	assert(kmscon_vte_handle_keyboard(vte, KEY_C, 'c', 'c', INPUT_CONTROL_MASK));
+	/* plain keys must not turn into function key sequences */
+	reset_sink(&sink);
+	assert(press(vte, KEY_SPACE, ' ', ' ', 0));
+	assert(!strcmp(sink.buf, " "));
+
+	reset_sink(&sink);
+	assert(press(vte, KEY_X, 'x', 'x', INPUT_ALT_MASK));
+	assert(!strcmp(sink.buf, "\033x"));
+
+	reset_sink(&sink);
+	assert(press(vte, KEY_ENTER, 0, '\r', 0));
+	assert(!strcmp(sink.buf, "\r"));
+
+	reset_sink(&sink);
+	assert(press(vte, KEY_TAB, 0, '\t', 0));
+	assert(!strcmp(sink.buf, "\t"));
+
+	reset_sink(&sink);
+	assert(press(vte, KEY_F1, 0, INPUT_INVALID, 0));
+	assert(!strcmp(sink.buf, "\033OP"));
+
+	reset_sink(&sink);
+	assert(press(vte, KEY_HOME, 0, INPUT_INVALID, 0));
+	assert(!strcmp(sink.buf, "\033[H"));
+
+	reset_sink(&sink);
+	assert(press(vte, KEY_C, 'c', 'c', INPUT_CONTROL_MASK));
 	assert(sink.len == 1 && sink.buf[0] == 0x03);
 
-	sink.len = 0;
-	sink.buf[0] = 0;
-	assert(kmscon_vte_handle_keyboard(vte, KEY_UP, 0, INPUT_INVALID, 0));
+	reset_sink(&sink);
+	assert(press(vte, KEY_UP, 0, INPUT_INVALID, 0));
 	assert(!strcmp(sink.buf, "\033[A"));
 
 	/* DECCKM switches the cursor keys to application mode */
-	sink.len = 0;
-	sink.buf[0] = 0;
+	reset_sink(&sink);
 	input_str(vte, "\033[?1h");
-	assert(kmscon_vte_handle_keyboard(vte, KEY_UP, 0, INPUT_INVALID, 0));
+	assert(press(vte, KEY_UP, 0, INPUT_INVALID, 0));
 	assert(!strcmp(sink.buf, "\033OA"));
 
 	/* backspace honors the backspace-sends-delete setting */
-	sink.len = 0;
-	sink.buf[0] = 0;
+	reset_sink(&sink);
 	kmscon_vte_set_backspace_sends_delete(vte, true);
-	assert(kmscon_vte_handle_keyboard(vte, KEY_BACKSPACE, 0, INPUT_INVALID, 0));
+	assert(press(vte, KEY_BACKSPACE, 0, INPUT_INVALID, 0));
 	assert(sink.len == 1 && sink.buf[0] == 0x7f);
 
-	sink.len = 0;
-	sink.buf[0] = 0;
+	reset_sink(&sink);
 	kmscon_vte_set_backspace_sends_delete(vte, false);
-	assert(kmscon_vte_handle_keyboard(vte, KEY_BACKSPACE, 0, INPUT_INVALID, 0));
+	assert(press(vte, KEY_BACKSPACE, 0, INPUT_INVALID, 0));
 	assert(sink.len == 1 && sink.buf[0] == 0x08);
 
 	kmscon_vte_free(vte);
@@ -358,8 +392,7 @@ static void test_mouse(void)
 	kmscon_vte_handle_mouse(vte, 8, 16, 0, KMSCON_MOUSE_PRESSED, 0);
 	assert(!strcmp(sink.buf, "\033[<0;2;2M"));
 
-	sink.len = 0;
-	sink.buf[0] = 0;
+	reset_sink(&sink);
 	kmscon_vte_handle_mouse(vte, 8, 16, 0, KMSCON_MOUSE_RELEASED, 0);
 	assert(!strcmp(sink.buf, "\033[<0;2;2m"));
 
@@ -380,8 +413,7 @@ static void test_paste(void)
 	kmscon_vte_paste(vte, "abc", 3);
 	assert(!strcmp(sink.buf, "abc"));
 
-	sink.len = 0;
-	sink.buf[0] = 0;
+	reset_sink(&sink);
 	input_str(vte, "\033[?2004h");
 	kmscon_vte_paste(vte, "abc", 3);
 	assert(!strcmp(sink.buf, "\033[200~abc\033[201~"));
@@ -409,8 +441,7 @@ static void test_effects(void)
 	assert(!strcmp(sink.osc, "setForeground"));
 
 	/* device status reports are answered on the pty */
-	sink.len = 0;
-	sink.buf[0] = 0;
+	reset_sink(&sink);
 	input_str(vte, "\033[6n");
 	assert(!strcmp(sink.buf, "\033[1;1R"));
 
