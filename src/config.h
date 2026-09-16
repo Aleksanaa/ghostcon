@@ -31,12 +31,12 @@
 #ifndef KMSCON_CONFIG_H
 #define KMSCON_CONFIG_H
 
-#include <libtsm.h>
 #include <stdbool.h>
 #include <stddef.h>
 #include <stdlib.h>
 #include "conf.h"
 #include "shl/dlist.h"
+#include "vte.h"
 
 enum kmscon_conf_gpu_selection {
 	KMSCON_GPU_ALL,
@@ -44,7 +44,7 @@ enum kmscon_conf_gpu_selection {
 	KMSCON_GPU_PRIMARY,
 };
 
-typedef uint8_t palette_t[TSM_COLOR_NUM][3];
+typedef uint8_t palette_t[KMSCON_COLOR_NUM][3];
 
 struct kmscon_conf_t {
 	/* header information */

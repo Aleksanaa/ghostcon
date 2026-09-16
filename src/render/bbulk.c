@@ -71,11 +71,11 @@ struct bbulk {
 	unsigned int off_y;	     /* offset of the first cell */
 	unsigned int max_x;	     /* maximum x offset of the last cell */
 	unsigned int max_y;	     /* maximum y offset of the last cell */
-	struct tsm_screen_attr attr; /* attributes for background color */
+	struct kmscon_screen_attr attr; /* attributes for background color */
 
 	unsigned int requests; /* number of blend calls, for debugging */
 	struct shl_lru *glyphs;
-	struct tsm_screen_cell *cells;
+	struct kmscon_cell *cells;
 	cell_flags_t *cell_flags;
 	unsigned int cell_count;
 
@@ -287,7 +287,7 @@ err_free:
 	return rglyph;
 }
 
-static struct kmscon_glyph *find_glyph(struct kmscon_text *txt, const struct tsm_screen_cell *cell)
+static struct kmscon_glyph *find_glyph(struct kmscon_text *txt, const struct kmscon_cell *cell)
 {
 	struct bbulk *bb = txt->data;
 	struct kmscon_glyph *glyph;
@@ -295,14 +295,14 @@ static struct kmscon_glyph *find_glyph(struct kmscon_text *txt, const struct tsm
 	uint32_t ch = cell->ch ? cell->ch : ' ';
 	uint64_t id;
 
-	font->attr.underline = !!cell->attr2.underline;
-	font->attr.italic = !!cell->attr2.italic;
-	font->attr.bold = !!cell->attr2.bold;
+	font->attr.underline = !!cell->attr.underline;
+	font->attr.italic = !!cell->attr.italic;
+	font->attr.bold = !!cell->attr.bold;
 
 	if (!kmscon_font_has_glyph(font, ch))
 		ch = FONT_REPLACEMENT_CHAR;
 
-	id = kmscon_glyph_id(cell->ch, cell->attr2.u8);
+	id = kmscon_glyph_id(cell->ch, cell->attr.u8);
 
 	glyph = shl_lru_get(bb->glyphs, id);
 	if (glyph)
@@ -350,7 +350,7 @@ static void set_coordinate(struct kmscon_text *txt, unsigned int *x, unsigned in
 	}
 }
 
-static void set_color(struct video_blend_req *req, const struct tsm_screen_cell *cell)
+static void set_color(struct video_blend_req *req, const struct kmscon_cell *cell)
 {
 	req->fr = cell->fg.r;
 	req->fg = cell->fg.g;
@@ -360,12 +360,12 @@ static void set_color(struct video_blend_req *req, const struct tsm_screen_cell 
 	req->bb = cell->bg.b;
 }
 
-static int bbulk_draw_cell(struct kmscon_text *txt, const struct tsm_screen_cell *cell,
+static int bbulk_draw_cell(struct kmscon_text *txt, const struct kmscon_cell *cell,
 			   unsigned int posx, unsigned int posy)
 {
 	struct bbulk *bb = txt->data;
 	unsigned int offset = posx + posy * txt->cols;
-	struct tsm_screen_cell *cur_cell = &bb->cells[offset];
+	struct kmscon_cell *cur_cell = &bb->cells[offset];
 	struct kmscon_glyph *glyph;
 	struct video_blend_req req;
 	bool last_col = (posx == txt->cols - 1);
@@ -439,7 +439,7 @@ static int bbulk_draw_cell(struct kmscon_text *txt, const struct tsm_screen_cell
 	return 0;
 }
 
-static int bbulk_draw(struct kmscon_text *txt, const struct tsm_screen_cell *cells,
+static int bbulk_draw(struct kmscon_text *txt, const struct kmscon_cell *cells,
 		      struct kmscon_cursor *cursor)
 {
 	unsigned int posx, posy, off;
@@ -450,8 +450,8 @@ static int bbulk_draw(struct kmscon_text *txt, const struct tsm_screen_cell *cel
 
 			if (cursor->visible && cursor->x == posx && cursor->y == posy)
 				bbulk_draw_cell(txt, &cursor->cell, posx, posy);
-			else if (cells[off].attr2.blink && txt->blinking) {
-				struct tsm_screen_cell cell = cells[off];
+			else if (cells[off].attr.blink && txt->blinking) {
+				struct kmscon_cell cell = cells[off];
 
 				cell.ch = ' ';
 				bbulk_draw_cell(txt, &cell, posx, posy);
@@ -557,7 +557,7 @@ static int bbulk_draw_pointer(struct kmscon_text *txt, unsigned int pointer_x,
 	struct bbulk *bb = txt->data;
 	struct video_blend_req req;
 	struct kmscon_glyph *bb_glyph;
-	struct tsm_screen_cell pointer_cell = {0};
+	struct kmscon_cell pointer_cell = {0};
 	unsigned int fw2 = FONT_WIDTH(txt) / 2;
 	unsigned int fh2 = FONT_HEIGHT(txt) / 2;
 
@@ -576,12 +576,12 @@ static int bbulk_draw_pointer(struct kmscon_text *txt, unsigned int pointer_x,
 	set_pointer_coordinate(bb, txt, &req, pointer_x, pointer_y);
 	mark_damaged(txt, bb, pointer_x, pointer_y);
 
-	req.fr = bb->attr.fr;
-	req.fg = bb->attr.fg;
-	req.fb = bb->attr.fb;
-	req.br = bb->attr.br;
-	req.bg = bb->attr.bg;
-	req.bb = bb->attr.bb;
+	req.fr = bb->attr.fg.r;
+	req.fg = bb->attr.fg.g;
+	req.fb = bb->attr.fg.b;
+	req.br = bb->attr.bg.r;
+	req.bg = bb->attr.bg.g;
+	req.bb = bb->attr.bg.b;
 	display_blend(txt->disp, &req);
 	bb->requests++;
 	return 0;
@@ -661,7 +661,7 @@ static int bbulk_render(struct kmscon_text *txt)
 	return ret;
 }
 
-static int bbulk_prepare(struct kmscon_text *txt, struct tsm_screen_attr *attr)
+static int bbulk_prepare(struct kmscon_text *txt, struct kmscon_screen_attr *attr)
 {
 	struct bbulk *bb = txt->data;
 	int i;
@@ -679,7 +679,7 @@ static int bbulk_prepare(struct kmscon_text *txt, struct tsm_screen_attr *attr)
 	bb->attr = *attr;
 
 	if (bb->redraw) {
-		display_clear(txt->disp, attr->br, attr->bg, attr->bb);
+		display_clear(txt->disp, attr->bg.r, attr->bg.g, attr->bg.b);
 		for (i = 0; i < bb->cell_count; i++)
 			damage_cell(bb, i);
 	} else if (display_has_damage(txt->disp)) {

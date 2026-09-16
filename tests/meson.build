@@ -36,15 +36,24 @@ test(
 test_text = executable(
     'test_text',
     'test_text.c',
-    dependencies: [libtsm_deps, shl_deps],
+    dependencies: [libghostty_vt_deps, shl_deps],
 )
 test('test_text', test_text)
+
+test_vte = executable(
+    'test_vte',
+    'test_vte.c',
+    '../src/vte.c',
+    include_directories: src_inc,
+    dependencies: [libghostty_vt_deps, shl_deps, xkbcommon_deps],
+)
+test('test_vte', test_vte)
 
 test_bbulk = executable(
     'test_bbulk',
     'test_bbulk.c',
     include_directories: src_inc,
-    dependencies: [libtsm_deps, htable_deps],
+    dependencies: [libghostty_vt_deps, htable_deps],
 )
 test('test_bbulk', test_bbulk)
 
@@ -53,7 +62,7 @@ test_asciinema = executable(
     'test_asciinema.c',
     '../src/misc/asciinema.c',
     include_directories: misc_inc,
-    dependencies: [libtsm_deps, shl_deps, eloop_deps],
+    dependencies: [libghostty_vt_deps, shl_deps, eloop_deps],
 )
 test('test_asciinema', test_asciinema)
 
@@ -63,7 +72,7 @@ test_issue = executable(
     '../src/misc/issue.c',
     '../src/misc/issue_network.c',
     include_directories: misc_inc,
-    dependencies: [libtsm_deps, shl_deps],
+    dependencies: [libghostty_vt_deps, shl_deps],
 )
 test('test_issue', test_issue)
 
@@ -73,6 +82,6 @@ test_issue_parameter = executable(
     '../src/misc/issue.c',
     '../src/misc/issue_network.c',
     include_directories: misc_inc,
-    dependencies: [libtsm_deps, shl_deps],
+    dependencies: [libghostty_vt_deps, shl_deps],
 )
 test('test_issue_parameter', test_issue_parameter)

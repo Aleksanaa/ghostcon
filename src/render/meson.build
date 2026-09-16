@@ -7,7 +7,7 @@ render_srcs = [
 
 render_dep = [
     shl_deps,
-    libtsm_deps,
+    libghostty_vt_deps,
     video_deps,
 ]
 
@@ -30,7 +30,7 @@ if enable_renderer_gltex
             embed_gen.process('gltex_atlas.frag', extra_args: shader_regex),
         ],
         name_prefix: '',
-        dependencies: [libtsm_deps, glesv2_deps, shl_deps, shl_gl_deps],
+        dependencies: [libghostty_vt_deps, glesv2_deps, shl_deps, shl_gl_deps],
         include_directories: src_inc,
         install: true,
         install_dir: moduledir,

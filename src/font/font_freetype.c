@@ -27,7 +27,7 @@
 #include <fontconfig/fontconfig.h>
 #include <freetype2/freetype/freetype.h>
 #include FT_FREETYPE_H
-#include <libtsm.h>
+#include <ghostty/vt.h>
 #include <stdbool.h>
 #include <stdlib.h>
 #include <string.h>
@@ -379,7 +379,7 @@ static struct kmscon_glyph *render_glyph(FT_Face face, FT_UInt index, uint32_t c
 	unsigned int cwidth;
 	struct kmscon_glyph *glyph;
 
-	cwidth = tsm_ucs4_get_width(ch);
+	cwidth = ghostty_unicode_codepoint_width(ch);
 	if (!cwidth)
 		return NULL;
 

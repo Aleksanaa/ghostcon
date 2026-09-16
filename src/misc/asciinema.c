@@ -4,7 +4,6 @@
 
 #include <ctype.h>
 #include <errno.h>
-#include <libtsm.h>
 #include <stdbool.h>
 #include <stdint.h>
 #include <stdio.h>
@@ -13,6 +12,7 @@
 #include <sys/types.h>
 #include "asciinema.h"
 #include "shl/eloop.h"
+#include "shl/misc.h"
 #include "shl/log.h"
 
 #define LOG_SUBSYSTEM "asciinema"
@@ -82,7 +82,7 @@ static int append_utf8(char **dst, char *end, uint32_t cp)
 	if (cp > 0x10ffff)
 		return -EINVAL;
 
-	len = tsm_ucs4_to_utf8(cp, u8);
+	len = shl_ucs4_to_utf8(cp, u8);
 	if (!len || len > sizeof(u8))
 		return -EINVAL;
 	if (p + len > end)

@@ -44,7 +44,7 @@
  */
 
 #include <glib.h>
-#include <libtsm.h>
+#include <ghostty/vt.h>
 #include <pango/pango.h>
 #include <pango/pangoft2.h>
 #include <pthread.h>
@@ -53,6 +53,7 @@
 #include <string.h>
 #include "font.h"
 #include "shl/log.h"
+#include "shl/misc.h"
 #include "video/video.h"
 
 #define LOG_SUBSYSTEM "font_pango"
@@ -113,7 +114,7 @@ static struct kmscon_glyph *get_glyph(struct face *face, const uint32_t ch,
 	size_t ulen, cnt;
 	char *val;
 
-	cwidth = tsm_ucs4_get_width(ch);
+	cwidth = ghostty_unicode_codepoint_width(ch);
 	if (!cwidth)
 		return NULL;
 
@@ -151,7 +152,7 @@ static struct kmscon_glyph *get_glyph(struct face *face, const uint32_t ch,
 	else
 		pango_attr_list_change(attrlist, pango_attr_weight_new(PANGO_WEIGHT_NORMAL));
 
-	val = tsm_ucs4_to_utf8_alloc(&ch, 1, &ulen);
+	val = shl_ucs4_to_utf8_alloc(&ch, 1, &ulen);
 	if (!val)
 		goto out_layout;
 

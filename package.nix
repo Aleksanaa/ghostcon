@@ -2,7 +2,7 @@
   lib,
   stdenv,
   meson,
-  libtsm,
+  libghostty-vt,
   systemdLibs,
   libxkbcommon,
   libdrm,
@@ -53,7 +53,7 @@ stdenv.mkDerivation {
     libGLU
     libGL
     libdrm
-    libtsm
+    libghostty-vt
     libxkbcommon
     freetype
     fontconfig

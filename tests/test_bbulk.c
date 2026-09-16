@@ -167,7 +167,7 @@ int main(void)
 		assert(bb->cells[i].ch == ID_DAMAGED);
 
 	/* Exercise prepare/render + damage path */
-	struct tsm_screen_attr attr;
+	struct kmscon_screen_attr attr;
 	memset(&attr, 0, sizeof(attr));
 	ret = bbulk_prepare(&txt, &attr);
 	assert(ret == 0);

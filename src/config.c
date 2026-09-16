@@ -682,25 +682,25 @@ static struct conf_grab def_grab_rotate_cw =
 static struct conf_grab def_grab_rotate_ccw = CONF_SINGLE_GRAB(SHL_LOGO_MASK, XKB_KEY_minus);
 
 static palette_t def_palette = {
-	[TSM_COLOR_BLACK] = {0, 0, 0},		   /* black */
-	[TSM_COLOR_RED] = {205, 0, 0},		   /* red */
-	[TSM_COLOR_GREEN] = {0, 205, 0},	   /* green */
-	[TSM_COLOR_YELLOW] = {205, 205, 0},	   /* yellow */
-	[TSM_COLOR_BLUE] = {0, 0, 238},		   /* blue */
-	[TSM_COLOR_MAGENTA] = {205, 0, 205},	   /* magenta */
-	[TSM_COLOR_CYAN] = {0, 205, 205},	   /* cyan */
-	[TSM_COLOR_LIGHT_GREY] = {229, 229, 229},  /* light grey */
-	[TSM_COLOR_DARK_GREY] = {127, 127, 127},   /* dark grey */
-	[TSM_COLOR_LIGHT_RED] = {255, 0, 0},	   /* light red */
-	[TSM_COLOR_LIGHT_GREEN] = {0, 255, 0},	   /* light green */
-	[TSM_COLOR_LIGHT_YELLOW] = {255, 255, 0},  /* light yellow */
-	[TSM_COLOR_LIGHT_BLUE] = {92, 92, 255},	   /* light blue */
-	[TSM_COLOR_LIGHT_MAGENTA] = {255, 0, 255}, /* light magenta */
-	[TSM_COLOR_LIGHT_CYAN] = {0, 255, 255},	   /* light cyan */
-	[TSM_COLOR_WHITE] = {255, 255, 255},	   /* white */
+	[KMSCON_COLOR_BLACK] = {0, 0, 0},		   /* black */
+	[KMSCON_COLOR_RED] = {205, 0, 0},		   /* red */
+	[KMSCON_COLOR_GREEN] = {0, 205, 0},	   /* green */
+	[KMSCON_COLOR_YELLOW] = {205, 205, 0},	   /* yellow */
+	[KMSCON_COLOR_BLUE] = {0, 0, 238},		   /* blue */
+	[KMSCON_COLOR_MAGENTA] = {205, 0, 205},	   /* magenta */
+	[KMSCON_COLOR_CYAN] = {0, 205, 205},	   /* cyan */
+	[KMSCON_COLOR_LIGHT_GREY] = {229, 229, 229},  /* light grey */
+	[KMSCON_COLOR_DARK_GREY] = {127, 127, 127},   /* dark grey */
+	[KMSCON_COLOR_LIGHT_RED] = {255, 0, 0},	   /* light red */
+	[KMSCON_COLOR_LIGHT_GREEN] = {0, 255, 0},	   /* light green */
+	[KMSCON_COLOR_LIGHT_YELLOW] = {255, 255, 0},  /* light yellow */
+	[KMSCON_COLOR_LIGHT_BLUE] = {92, 92, 255},	   /* light blue */
+	[KMSCON_COLOR_LIGHT_MAGENTA] = {255, 0, 255}, /* light magenta */
+	[KMSCON_COLOR_LIGHT_CYAN] = {0, 255, 255},	   /* light cyan */
+	[KMSCON_COLOR_WHITE] = {255, 255, 255},	   /* white */
 
-	[TSM_COLOR_FOREGROUND] = {229, 229, 229}, /* light grey */
-	[TSM_COLOR_BACKGROUND] = {0, 0, 0},	  /* black */
+	[KMSCON_COLOR_FOREGROUND] = {229, 229, 229}, /* light grey */
+	[KMSCON_COLOR_BACKGROUND] = {0, 0, 0},	  /* black */
 };
 
 int kmscon_conf_new(struct conf_ctx **out)
@@ -804,27 +804,27 @@ int kmscon_conf_new(struct conf_ctx **out)
 
 		/* Palette Options */
 		CONF_OPTION_STRING(0, "palette", &conf->palette, NULL),
-		CONF_OPTION_COLOR("palette-black", conf->custom_palette, TSM_COLOR_BLACK),
-		CONF_OPTION_COLOR("palette-red", conf->custom_palette, TSM_COLOR_RED),
-		CONF_OPTION_COLOR("palette-green", conf->custom_palette, TSM_COLOR_GREEN),
-		CONF_OPTION_COLOR("palette-yellow", conf->custom_palette, TSM_COLOR_YELLOW),
-		CONF_OPTION_COLOR("palette-blue", conf->custom_palette, TSM_COLOR_BLUE),
-		CONF_OPTION_COLOR("palette-magenta", conf->custom_palette, TSM_COLOR_MAGENTA),
-		CONF_OPTION_COLOR("palette-cyan", conf->custom_palette, TSM_COLOR_CYAN),
-		CONF_OPTION_COLOR("palette-light-grey", conf->custom_palette, TSM_COLOR_LIGHT_GREY),
-		CONF_OPTION_COLOR("palette-dark-grey", conf->custom_palette, TSM_COLOR_DARK_GREY),
-		CONF_OPTION_COLOR("palette-light-red", conf->custom_palette, TSM_COLOR_LIGHT_RED),
+		CONF_OPTION_COLOR("palette-black", conf->custom_palette, KMSCON_COLOR_BLACK),
+		CONF_OPTION_COLOR("palette-red", conf->custom_palette, KMSCON_COLOR_RED),
+		CONF_OPTION_COLOR("palette-green", conf->custom_palette, KMSCON_COLOR_GREEN),
+		CONF_OPTION_COLOR("palette-yellow", conf->custom_palette, KMSCON_COLOR_YELLOW),
+		CONF_OPTION_COLOR("palette-blue", conf->custom_palette, KMSCON_COLOR_BLUE),
+		CONF_OPTION_COLOR("palette-magenta", conf->custom_palette, KMSCON_COLOR_MAGENTA),
+		CONF_OPTION_COLOR("palette-cyan", conf->custom_palette, KMSCON_COLOR_CYAN),
+		CONF_OPTION_COLOR("palette-light-grey", conf->custom_palette, KMSCON_COLOR_LIGHT_GREY),
+		CONF_OPTION_COLOR("palette-dark-grey", conf->custom_palette, KMSCON_COLOR_DARK_GREY),
+		CONF_OPTION_COLOR("palette-light-red", conf->custom_palette, KMSCON_COLOR_LIGHT_RED),
 		CONF_OPTION_COLOR("palette-light-green", conf->custom_palette,
-				  TSM_COLOR_LIGHT_GREEN),
+				  KMSCON_COLOR_LIGHT_GREEN),
 		CONF_OPTION_COLOR("palette-light-yellow", conf->custom_palette,
-				  TSM_COLOR_LIGHT_YELLOW),
-		CONF_OPTION_COLOR("palette-light-blue", conf->custom_palette, TSM_COLOR_LIGHT_BLUE),
+				  KMSCON_COLOR_LIGHT_YELLOW),
+		CONF_OPTION_COLOR("palette-light-blue", conf->custom_palette, KMSCON_COLOR_LIGHT_BLUE),
 		CONF_OPTION_COLOR("palette-light-magenta", conf->custom_palette,
-				  TSM_COLOR_LIGHT_MAGENTA),
-		CONF_OPTION_COLOR("palette-light-cyan", conf->custom_palette, TSM_COLOR_LIGHT_CYAN),
-		CONF_OPTION_COLOR("palette-white", conf->custom_palette, TSM_COLOR_WHITE),
-		CONF_OPTION_COLOR("palette-foreground", conf->custom_palette, TSM_COLOR_FOREGROUND),
-		CONF_OPTION_COLOR("palette-background", conf->custom_palette, TSM_COLOR_BACKGROUND),
+				  KMSCON_COLOR_LIGHT_MAGENTA),
+		CONF_OPTION_COLOR("palette-light-cyan", conf->custom_palette, KMSCON_COLOR_LIGHT_CYAN),
+		CONF_OPTION_COLOR("palette-white", conf->custom_palette, KMSCON_COLOR_WHITE),
+		CONF_OPTION_COLOR("palette-foreground", conf->custom_palette, KMSCON_COLOR_FOREGROUND),
+		CONF_OPTION_COLOR("palette-background", conf->custom_palette, KMSCON_COLOR_BACKGROUND),
 	};
 
 	ret = conf_ctx_new(&ctx, options, sizeof(options) / sizeof(*options), conf);

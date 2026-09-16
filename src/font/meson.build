@@ -60,7 +60,7 @@ if enable_font_unifont
             embed_gen.process(unifont_bin),
         ],
         name_prefix: '',
-        dependencies: [libtsm_deps, shl_deps, zlib_deps],
+        dependencies: [libghostty_vt_deps, shl_deps, zlib_deps],
         install: true,
         install_dir: moduledir,
     )
@@ -75,7 +75,7 @@ if enable_font_freetype
         ],
         name_prefix: '',
         dependencies: [
-            libtsm_deps,
+            libghostty_vt_deps,
             freetype_deps,
             fontconfig_deps,
             threads_deps,
@@ -94,7 +94,7 @@ if enable_font_pango
             'mod_pango.c',
         ],
         name_prefix: '',
-        dependencies: [libtsm_deps, pango_deps, threads_deps, shl_deps],
+        dependencies: [libghostty_vt_deps, pango_deps, threads_deps, shl_deps],
         install: true,
         install_dir: moduledir,
     )

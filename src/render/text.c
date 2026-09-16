@@ -32,7 +32,6 @@
  */
 
 #include <errno.h>
-#include <libtsm.h>
 #include <pthread.h>
 #include <stdlib.h>
 #include <string.h>
@@ -413,7 +412,7 @@ int kmscon_text_rotate(struct kmscon_text *txt, enum Orientation orientation)
  *
  * Returns: 0 on success, negative error code on failure.
  */
-int kmscon_text_prepare(struct kmscon_text *txt, struct tsm_screen_attr *attr, bool blinking)
+int kmscon_text_prepare(struct kmscon_text *txt, struct kmscon_screen_attr *attr, bool blinking)
 {
 	int ret = 0;
 
@@ -430,70 +429,58 @@ int kmscon_text_prepare(struct kmscon_text *txt, struct tsm_screen_attr *attr, b
 	return ret;
 }
 
-static bool is_cursor_blinking(enum tsm_screen_cursor_style style)
-{
-	return (!style || style & 1);
-}
-
-static bool is_underline(enum tsm_screen_cursor_style style)
-{
-	return (style == TSM_SCREEN_CURSOR_UNDERLINE_BLINK ||
-		style == TSM_SCREEN_CURSOR_UNDERLINE_STEADY);
-}
-
-static bool is_block(enum tsm_screen_cursor_style style)
-{
-	return (style == TSM_SCREEN_CURSOR_DEFAULT || style == TSM_SCREEN_CURSOR_BLOCK_BLINK ||
-		style == TSM_SCREEN_CURSOR_BLOCK_STEADY);
-}
-
-static bool is_vbar(enum tsm_screen_cursor_style style)
-{
-	return (style == TSM_SCREEN_CURSOR_VBAR_BLINK || style == TSM_SCREEN_CURSOR_VBAR_STEADY);
-}
-
 /**
  * kmscon_text_draw:
  * @txt: valid text renderer
- * @con: valid tsm screen
+ * @vte: valid vte object
  *
  * This draw all cells in the screen.
  *
- * Returns: 0 on success or negative error code if this glyph couldn't be drawn.
+ * Returns: 0 on success or negative error code if this glyph couldnt be drawn.
  */
-int kmscon_text_draw(struct kmscon_text *txt, struct tsm_screen *con, bool cursor_blink)
+int kmscon_text_draw(struct kmscon_text *txt, struct kmscon_vte *vte, bool cursor_blink)
 {
-	const struct tsm_screen_cell *cells;
+	struct kmscon_vte_screen screen;
 	struct kmscon_cursor cursor = {0};
-	enum tsm_screen_cursor_style style;
+	int ret;
 
-	if (!txt || !con)
+	if (!txt || !vte)
 		return -EINVAL;
 
-	cells = tsm_screen_draw2(con);
-	cursor.x = tsm_screen_get_cursor_x(con);
-	cursor.y = tsm_screen_get_cursor_y(con);
-	style = tsm_screen_get_cursor_style(con);
+	ret = kmscon_vte_draw(vte, &screen);
+	if (ret)
+		return ret;
 
-	if (cursor.x < txt->cols && cursor.y < txt->rows) {
-		unsigned offset = cursor.x + cursor.y * txt->cols;
+	if (screen.cols < txt->cols || screen.rows < txt->rows)
+		return -EINVAL;
 
-		cursor.visible = !(tsm_screen_get_flags(con) & TSM_SCREEN_HIDE_CURSOR);
-		cursor.cell.fg = cells[offset].fg;
-		cursor.cell.bg = cells[offset].bg;
-		if (is_cursor_blinking(style))
-			cursor.visible = cursor.visible && !cursor_blink;
-		if (is_underline(style)) {
-			cursor.cell.attr2.underline = !cells[offset].attr2.underline;
-			cursor.cell.ch = cells[offset].ch;
-		} else if (is_block(style)) {
-			cursor.cell.fg = cells[offset].bg;
-			cursor.cell.bg = cells[offset].fg;
-			cursor.cell.ch = cells[offset].ch;
-		} else if (is_vbar(style))
+	cursor.x = screen.cursor_x;
+	cursor.y = screen.cursor_y;
+
+	if (screen.cursor_visible && cursor.x < txt->cols && cursor.y < txt->rows) {
+		const struct kmscon_cell *cell = &screen.cells[cursor.x + cursor.y * screen.cols];
+
+		cursor.visible = !(screen.cursor_blinks && cursor_blink);
+		cursor.cell.fg = cell->fg;
+		cursor.cell.bg = cell->bg;
+
+		switch (screen.cursor_shape) {
+		case KMSCON_CURSOR_UNDERLINE:
+			cursor.cell.attr.underline = !cell->attr.underline;
+			cursor.cell.ch = cell->ch;
+			break;
+		case KMSCON_CURSOR_BAR:
 			cursor.cell.ch = FONT_VBAR;
+			break;
+		default:
+			cursor.cell.fg = cell->bg;
+			cursor.cell.bg = cell->fg;
+			cursor.cell.ch = cell->ch;
+			break;
+		}
 	}
-	return txt->ops->draw(txt, cells, &cursor);
+
+	return txt->ops->draw(txt, screen.cells, &cursor);
 }
 
 /**

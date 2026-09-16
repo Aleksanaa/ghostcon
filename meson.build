@@ -51,7 +51,7 @@ systemdsystemunitdir = systemd_deps.get_variable(
 # Required dependencies
 #
 xkbcommon_deps = dependency('xkbcommon', version: '>=0.5.0')
-libtsm_deps = dependency('libtsm', version: '>=4.6.0', allow_fallback: true)
+libghostty_vt_deps = dependency('libghostty-vt')
 libudev_deps = dependency('libudev', version: '>=172')
 dl_deps = dependency('dl')
 threads_deps = dependency('threads')
@@ -156,6 +156,9 @@ config.set_quoted('BUILD_CONFIG_DIR', prefix / sysconfdir)
 
 # Default $TERM value
 config.set_quoted('BUILD_DEFAULT_TERM', get_option('term'))
+
+# Package version
+config.set_quoted('BUILD_VERSION', meson.project_version())
 
 # Make all files include "config.h" by default. This shouldn't cause any
 # problems and we cannot forget to include it anymore.

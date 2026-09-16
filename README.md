@@ -9,7 +9,7 @@ console. See kmscon(1) man-page for usage information.
 ## Requirements
 ### Mandatory dependencies
 Kmscon requires the following software:
-  - [libtsm](https://github.com/kmscon/libtsm): terminal emulator state machine
+  - [libghostty-vt](https://github.com/ghostty-org/ghostty): terminal emulator state machine, extracted from Ghostty
   - [libudev](https://www.freedesktop.org/software/systemd/man/libudev.html): providing input, video, etc. device hotplug support (>=v172)
   - [libxkbcommon](https://xkbcommon.org/): providing internationalized keyboard handling
   - **linux-headers**: linux kernel headers for ABI definitions

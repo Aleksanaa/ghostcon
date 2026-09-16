@@ -61,6 +61,67 @@
 		_a < _b ? _a : _b;                                                                 \
 	})
 
+#define SHL_UCS4_MAX 0x7fffffffUL
+#define SHL_UCS4_MAX_LEN 4
+
+/* Encode a single UCS-4 value as UTF-8. @out must be at least
+ * SHL_UCS4_MAX_LEN bytes long, the number of written bytes is returned.
+ * Values that cannot be encoded, that is surrogates, non-characters and
+ * out-of-range values, return 0. */
+static inline size_t shl_ucs4_to_utf8(uint32_t ucs4, char *out)
+{
+	if (ucs4 >= 0xd800 && ucs4 <= 0xdfff)
+		return 0;
+	if (ucs4 > 0x10ffff || (ucs4 & 0xffff) == 0xffff || (ucs4 & 0xffff) == 0xfffe)
+		return 0;
+	if (ucs4 >= 0xfdd0 && ucs4 <= 0xfdef)
+		return 0;
+
+	if (ucs4 < 0x80) {
+		*out = (char)ucs4;
+		return 1;
+	} else if (ucs4 < 0x800) {
+		*out++ = (char)(0xc0 | (ucs4 >> 6));
+		*out = (char)(0x80 | (ucs4 & 0x3f));
+		return 2;
+	} else if (ucs4 < 0x10000) {
+		*out++ = (char)(0xe0 | (ucs4 >> 12));
+		*out++ = (char)(0x80 | ((ucs4 >> 6) & 0x3f));
+		*out = (char)(0x80 | (ucs4 & 0x3f));
+		return 3;
+	}
+
+	*out++ = (char)(0xf0 | (ucs4 >> 18));
+	*out++ = (char)(0x80 | ((ucs4 >> 12) & 0x3f));
+	*out++ = (char)(0x80 | ((ucs4 >> 6) & 0x3f));
+	*out = (char)(0x80 | (ucs4 & 0x3f));
+	return 4;
+}
+
+/* Encode an UCS-4 string as a newly allocated UTF-8 string. The returned
+ * string is not zero-terminated, its length is stored in @len. */
+static inline char *shl_ucs4_to_utf8_alloc(const uint32_t *ucs4, size_t num, size_t *len)
+{
+	char *val;
+	size_t i, pos;
+
+	val = malloc(SHL_UCS4_MAX_LEN * num);
+	if (!val)
+		return NULL;
+
+	for (i = 0, pos = 0; i < num; ++i)
+		pos += shl_ucs4_to_utf8(ucs4[i], &val[pos]);
+
+	if (!pos) {
+		free(val);
+		return NULL;
+	}
+
+	if (len)
+		*len = pos;
+	return val;
+}
+
 static inline int shl_strtou(const char *input, unsigned int *output)
 {
 	unsigned long val;
@@ -496,7 +557,7 @@ static inline int shl_dup_array(char ***out, char **argv)
 
 /* TODO: xkbcommon should provide these flags!
  * We currently copy them into each library API we use so we need  to keep
- * them in sync. Currently, they're used in uterm-input and tsm-vte. */
+ * them in sync. Currently, they're used in uterm-input and the vte layer. */
 enum shl_xkb_mods {
 	SHL_SHIFT_MASK = (1 << 0),
 	SHL_LOCK_MASK = (1 << 1),

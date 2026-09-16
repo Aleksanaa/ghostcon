@@ -10,6 +10,10 @@
 #include "../src/render/text.c" /* pull in kmscon_text_set without changing meson */
 
 /* --- Stubs for external functions used by kmscon_text_set --- */
+int kmscon_vte_draw(struct kmscon_vte *vte, struct kmscon_vte_screen *out)
+{
+	return -EINVAL;
+}
 void kmscon_font_ref(struct kmscon_font *font) {}
 void kmscon_font_unref(struct kmscon_font *font) {}
 void display_ref(struct display *disp) {}

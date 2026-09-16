@@ -115,7 +115,7 @@ struct gltex {
 	GLfloat cos;
 	GLfloat sin;
 
-	struct tsm_screen_attr attr;
+	struct kmscon_screen_attr attr;
 };
 
 static int gltex_init(struct kmscon_text *txt)
@@ -391,7 +391,7 @@ err_free:
 	return NULL;
 }
 
-static struct gl_glyph *find_glyph(struct kmscon_text *txt, const struct tsm_screen_cell *cell)
+static struct gl_glyph *find_glyph(struct kmscon_text *txt, const struct kmscon_cell *cell)
 {
 	struct gltex *gt = txt->data;
 	struct atlas *atlas;
@@ -403,17 +403,17 @@ static struct gl_glyph *find_glyph(struct kmscon_text *txt, const struct tsm_scr
 	uint32_t ch = cell->ch ? cell->ch : ' ';
 	uint64_t id;
 
-	font->attr.underline = !!cell->attr2.underline;
-	font->attr.italic = !!cell->attr2.italic;
-	font->attr.bold = !!cell->attr2.bold;
+	font->attr.underline = !!cell->attr.underline;
+	font->attr.italic = !!cell->attr.italic;
+	font->attr.bold = !!cell->attr.bold;
 
-	if (cell->attr2.blink && txt->blinking)
+	if (cell->attr.blink && txt->blinking)
 		ch = ' ';
 
 	if (!kmscon_font_has_glyph(font, ch))
 		ch = FONT_REPLACEMENT_CHAR;
 
-	id = kmscon_glyph_id(ch, cell->attr2.u8);
+	id = kmscon_glyph_id(ch, cell->attr.u8);
 
 	if (shl_hashtable_find(gt->glyphs, (void **)&glglyph, id))
 		return glglyph;
@@ -492,7 +492,7 @@ static int gltex_rotate(struct kmscon_text *txt, enum Orientation orientation)
 	return 0;
 }
 
-static int gltex_prepare(struct kmscon_text *txt, struct tsm_screen_attr *attr)
+static int gltex_prepare(struct kmscon_text *txt, struct kmscon_screen_attr *attr)
 {
 	struct gltex *gt = txt->data;
 	struct atlas *atlas;
@@ -511,12 +511,12 @@ static int gltex_prepare(struct kmscon_text *txt, struct tsm_screen_attr *attr)
 	}
 	gt->attr = *attr;
 
-	glClearColor(gt->attr.br / 255.0, gt->attr.bg / 255.0, gt->attr.bb / 255.0, 1);
+	glClearColor(gt->attr.bg.r / 255.0, gt->attr.bg.g / 255.0, gt->attr.bg.b / 255.0, 1);
 	glClear(GL_COLOR_BUFFER_BIT);
 	return 0;
 }
 
-static int gltex_draw_cell(struct kmscon_text *txt, const struct tsm_screen_cell *cell,
+static int gltex_draw_cell(struct kmscon_text *txt, const struct kmscon_cell *cell,
 			   unsigned int posx, unsigned int posy)
 {
 	struct gltex *gt = txt->data;
@@ -591,7 +591,7 @@ static int gltex_draw_cell(struct kmscon_text *txt, const struct tsm_screen_cell
 	return 0;
 }
 
-static int gltex_draw(struct kmscon_text *txt, const struct tsm_screen_cell *cells,
+static int gltex_draw(struct kmscon_text *txt, const struct kmscon_cell *cells,
 		      struct kmscon_cursor *cursor)
 {
 	unsigned int posx, posy, off;
@@ -602,8 +602,8 @@ static int gltex_draw(struct kmscon_text *txt, const struct tsm_screen_cell *cel
 
 			if (cursor->visible && cursor->x == posx && cursor->y == posy)
 				gltex_draw_cell(txt, &cursor->cell, posx, posy);
-			else if (cells[off].attr2.blink && txt->blinking) {
-				struct tsm_screen_cell cell = cells[off];
+			else if (cells[off].attr.blink && txt->blinking) {
+				struct kmscon_cell cell = cells[off];
 
 				cell.ch = ' ';
 				gltex_draw_cell(txt, &cell, posx, posy);
@@ -622,7 +622,7 @@ static int gltex_draw_pointer(struct kmscon_text *txt, unsigned int x, unsigned 
 	float gl_x1, gl_x2, gl_y1, gl_y2;
 	unsigned int sw, sh;
 	int i, idx;
-	struct tsm_screen_cell pointer_cell = {0};
+	struct kmscon_cell pointer_cell = {0};
 	pointer_cell.ch = 'I';
 
 	glyph = find_glyph(txt, &pointer_cell);
@@ -685,12 +685,12 @@ static int gltex_draw_pointer(struct kmscon_text *txt, unsigned int x, unsigned 
 
 	for (i = 0; i < 6; ++i) {
 		idx = atlas->cache_num * 3 * 6 + i * 3;
-		atlas->cache_fgcol[idx + 0] = gt->attr.fr / 255.0;
-		atlas->cache_fgcol[idx + 1] = gt->attr.fg / 255.0;
-		atlas->cache_fgcol[idx + 2] = gt->attr.fb / 255.0;
-		atlas->cache_bgcol[idx + 0] = gt->attr.br / 255.0;
-		atlas->cache_bgcol[idx + 1] = gt->attr.bg / 255.0;
-		atlas->cache_bgcol[idx + 2] = gt->attr.bb / 255.0;
+		atlas->cache_fgcol[idx + 0] = gt->attr.fg.r / 255.0;
+		atlas->cache_fgcol[idx + 1] = gt->attr.fg.g / 255.0;
+		atlas->cache_fgcol[idx + 2] = gt->attr.fg.b / 255.0;
+		atlas->cache_bgcol[idx + 0] = gt->attr.bg.r / 255.0;
+		atlas->cache_bgcol[idx + 1] = gt->attr.bg.g / 255.0;
+		atlas->cache_bgcol[idx + 2] = gt->attr.bg.b / 255.0;
 	}
 
 	++atlas->cache_num;

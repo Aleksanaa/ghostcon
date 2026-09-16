@@ -4,18 +4,14 @@
 # It is an attempt to replace the in-kernel VT implementation with a userspace
 # console.
 #
-# The terminal emulation is implemented in a related libtsm.
+# The terminal emulation is implemented by libghostty-vt.
 #
 # vttest:
-# - identifies as a VT220 (according to secondary DA), but uses nonstandard
-#   primary DA
-#     \E[?60;1;6;9;15c
-#   i.e. (60 is nonstandard), and the features are
-#     1 = 132 columns
-#     6 = selective erase
-#     9 = national replacement character-sets
-#     15 = DEC technical set
-#   but it actually supports none of those features.
+# - identifies as a VT220 by both the primary and the secondary DA
+#     \E[?62;22c
+#   i.e. 62 = level 2 conformance (VT220) and the features are
+#     22 = ANSI color
+#   DCS sequences are not supported, hence no higher conformance level.
 # - supports VT100 line-drawing
 # - does not support DECALN, failing the ECH and alternate-screen tests.
 # - supports X10 and X11 normal mouse events

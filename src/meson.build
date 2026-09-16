@@ -53,10 +53,11 @@ kmscon_srcs = [
     'config.c',
     'main.c',
     'terminal.c',
+    'vte.c',
 ]
 kmscon_dep = [
     xkbcommon_deps,
-    libtsm_deps,
+    libghostty_vt_deps,
     threads_deps,
     dl_deps,
     shl_deps,
