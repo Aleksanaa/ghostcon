@@ -79,8 +79,39 @@ struct input_pointer {
 	int32_t min_y;
 	int32_t max_y;
 
-	/* Track which button is currently pressed (BUTTON_NONE=none, 0=left, 1=right, 2=middle) */
+	/* Track which button is currently pressed (BUTTON_NONE=none, 0=left, 1=middle, 2=right) */
 	uint8_t pressed_button;
+
+	/*
+	 * How many fingers are on the touchpad right now, from the BTN_TOOL_*
+	 * events. A clickpad has one physical button and reports every press as
+	 * BTN_LEFT, so this is the only thing that says which button the user
+	 * meant.
+	 */
+	uint8_t fingers;
+
+	/*
+	 * The most fingers that touched the pad during the current contact. A
+	 * tap is judged by this rather than by the count at lift-off, because
+	 * fingers of a two-finger tap rarely leave the pad together.
+	 */
+	uint8_t tap_fingers;
+
+	/*
+	 * When the contact started, how far the fingers have wandered since,
+	 * and whether a physical click already happened during it. Together
+	 * these separate a tap from a drag or a press.
+	 */
+	struct timespec touch_start;
+	int32_t touch_travel;
+	bool touch_clicked;
+
+	/* last raw position, for measuring travel and scroll deltas */
+	int32_t touch_prev_x;
+	int32_t touch_prev_y;
+
+	/* leftover two-finger scroll motion not yet worth a wheel click */
+	int32_t scroll_accum;
 };
 
 struct input_dev {

@@ -1066,8 +1066,24 @@ static void free_selection(struct kmscon_terminal *term)
 
 static void copy_selection(struct kmscon_terminal *term)
 {
+	char *buf = NULL;
+	int len;
+
+	len = kmscon_vte_selection_copy(term->vte, &buf);
+
+	/*
+	 * A click that selected nothing still comes through here. Keeping what
+	 * the last real selection left behind matters: otherwise every click
+	 * empties the buffer that a middle-click paste reads from.
+	 */
+	if (len <= 0) {
+		free(buf);
+		return;
+	}
+
 	free_selection(term);
-	term->pointer.copy_len = kmscon_vte_selection_copy(term->vte, &term->pointer.copy);
+	term->pointer.copy = buf;
+	term->pointer.copy_len = len;
 }
 
 /* An application copied something via OSC 52, put it where a middle-click
