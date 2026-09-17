@@ -411,6 +411,9 @@ static struct kmscon_glyph *render_glyph(FT_Face face, FT_UInt index, uint32_t c
 	else
 		copy_glyph(&glyph->buf, face, &face->glyph->bitmap, attr->underline);
 
+	if (attr->cursor_bar)
+		kmscon_glyph_draw_vbar(&glyph->buf, attr->width);
+
 	return glyph;
 }
 

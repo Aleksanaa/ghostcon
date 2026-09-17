@@ -472,7 +472,11 @@ int kmscon_text_draw(struct kmscon_text *txt, struct kmscon_vte *vte, bool curso
 				cursor.cell.fg = screen.cursor_color;
 			break;
 		case KMSCON_CURSOR_BAR:
-			cursor.cell.ch = FONT_VBAR;
+			/* The bar is drawn into the glyph, so the character
+			 * below the cursor stays readable. It shares the color
+			 * of the cell, there is only one per cell. */
+			cursor.cell.attr.cursor_bar = 1;
+			cursor.cell.ch = cell->ch;
 			if (screen.cursor_has_color)
 				cursor.cell.fg = screen.cursor_color;
 			break;

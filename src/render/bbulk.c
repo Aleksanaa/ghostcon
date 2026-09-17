@@ -65,12 +65,12 @@ typedef union {
 } cell_flags_t;
 
 struct bbulk {
-	unsigned int sw;	     /* screen width */
-	unsigned int sh;	     /* screen height */
-	unsigned int off_x;	     /* offset of the first cell */
-	unsigned int off_y;	     /* offset of the first cell */
-	unsigned int max_x;	     /* maximum x offset of the last cell */
-	unsigned int max_y;	     /* maximum y offset of the last cell */
+	unsigned int sw;		/* screen width */
+	unsigned int sh;		/* screen height */
+	unsigned int off_x;		/* offset of the first cell */
+	unsigned int off_y;		/* offset of the first cell */
+	unsigned int max_x;		/* maximum x offset of the last cell */
+	unsigned int max_y;		/* maximum y offset of the last cell */
 	struct kmscon_screen_attr attr; /* attributes for background color */
 
 	unsigned int requests; /* number of blend calls, for debugging */
@@ -296,6 +296,7 @@ static struct kmscon_glyph *find_glyph(struct kmscon_text *txt, const struct kms
 	uint64_t id;
 
 	font->attr.underline = !!cell->attr.underline;
+	font->attr.cursor_bar = !!cell->attr.cursor_bar;
 	font->attr.italic = !!cell->attr.italic;
 	font->attr.bold = !!cell->attr.bold;
 

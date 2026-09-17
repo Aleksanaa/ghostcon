@@ -43,8 +43,8 @@
  * pango, freetype2 and more.
  */
 
-#include <glib.h>
 #include <ghostty/vt.h>
+#include <glib.h>
 #include <pango/pango.h>
 #include <pango/pangoft2.h>
 #include <pthread.h>
@@ -190,6 +190,9 @@ static struct kmscon_glyph *get_glyph(struct face *face, const uint32_t ch,
 	bitmap.buffer = glyph->buf.data;
 
 	pango_ft2_render_layout_line(&bitmap, line, -rec.x, face->baseline);
+
+	if (attr->cursor_bar)
+		kmscon_glyph_draw_vbar(&glyph->buf, face->real_attr.width);
 
 out_layout:
 	g_object_unref(layout);

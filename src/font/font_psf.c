@@ -218,6 +218,10 @@ static struct kmscon_glyph *new_glyph(uint32_t ch, const struct kmscon_font *kfo
 				unfold(c & (1 << (font->width - 1 - l)));
 		}
 	}
+
+	if (kfont->attr.cursor_bar)
+		kmscon_glyph_draw_vbar(&glyph->buf, kfont->attr.width);
+
 	return glyph;
 }
 

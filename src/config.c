@@ -259,7 +259,8 @@ static void print_help()
 		"\n"
 		"\t    A <color> is an `r,g,b' triple, a color name such as\n"
 		"\t    `cornflowerblue', a hex value such as `#1e1e2e' or an X11\n"
-		"\t    specification such as `rgb:1e/1e/2e'\n",
+		"\t    specification such as `rgb:1e/1e/2e'. In a config file a `#'\n"
+		"\t    starts a comment, write hex values without it there\n",
 		"kmscon");
 	/*
 	 * 80 char line:

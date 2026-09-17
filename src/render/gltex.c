@@ -404,6 +404,7 @@ static struct gl_glyph *find_glyph(struct kmscon_text *txt, const struct kmscon_
 	uint64_t id;
 
 	font->attr.underline = !!cell->attr.underline;
+	font->attr.cursor_bar = !!cell->attr.cursor_bar;
 	font->attr.italic = !!cell->attr.italic;
 	font->attr.bold = !!cell->attr.bold;
 

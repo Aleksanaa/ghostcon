@@ -124,6 +124,10 @@ static struct kmscon_glyph *new_glyph(uint32_t ch, const struct kmscon_font_attr
 			glyph->buf.data[i * glyph->buf.width + j] = unfold(c & (1 << (7 - l)));
 		}
 	}
+
+	if (attr->cursor_bar)
+		kmscon_glyph_draw_vbar(&glyph->buf, attr->width);
+
 	return glyph;
 }
 

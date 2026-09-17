@@ -757,7 +757,11 @@
             color name such as <literal>cornflowerblue</literal>, as a hex
             value such as <literal>#1e1e2e</literal>, or in the
             <literal>rgb:1e/1e/2e</literal> and
-            <literal>rgbi:0.1/0.1/0.2</literal> notations.</para>
+            <literal>rgbi:0.1/0.1/0.2</literal> notations. Note that a
+            <literal>#</literal> starts a comment in
+            <citerefentry><refentrytitle>kmscon.conf</refentrytitle>
+            <manvolnum>5</manvolnum></citerefentry>, so hex values have to be
+            written without it there, as <literal>1e1e2e</literal>.</para>
 
       <varlistentry>
         <term><option>--palette-black {color}</option></term>

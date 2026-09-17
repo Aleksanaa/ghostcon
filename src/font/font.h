@@ -55,6 +55,7 @@ struct kmscon_font_attr {
 	bool bold;
 	bool italic;
 	bool underline;
+	bool cursor_bar;
 	unsigned int height;
 	unsigned int width;
 };
@@ -71,6 +72,22 @@ struct kmscon_glyph {
 	bool double_width;
 	struct video_buffer buf; // Must be last
 };
+
+/* Draw a bar into the left edge of a rendered glyph. A bar cursor is drawn
+ * this way instead of as a glyph of its own so that the character below the
+ * cursor stays visible. */
+static inline void kmscon_glyph_draw_vbar(struct video_buffer *buf, unsigned int cell_width)
+{
+	unsigned int thickness = cell_width / 8;
+	unsigned int i, j;
+
+	if (!thickness)
+		thickness = 1;
+
+	for (i = 0; i < buf->height; ++i)
+		for (j = 0; j < thickness; ++j)
+			buf->data[i * buf->width + j] = 0xff;
+}
 
 static inline unsigned int kmscon_glyph_cwidth(const struct kmscon_glyph *glyph)
 {

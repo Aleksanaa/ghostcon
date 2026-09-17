@@ -78,7 +78,10 @@ typedef union {
 		uint8_t italic : 1;
 		uint8_t underline : 1;
 		uint8_t blink : 1;
-		uint8_t reserved : 4;
+		/* not a character attribute, this asks the renderers for a bar
+		 * along the left edge of the cell, that is a bar cursor */
+		uint8_t cursor_bar : 1;
+		uint8_t reserved : 3;
 	};
 	uint8_t u8;
 } kmscon_attr_t;

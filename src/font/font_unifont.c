@@ -151,6 +151,10 @@ static struct kmscon_glyph *new_glyph(const struct kmscon_font_attr *attr, const
 			off += g->buf.width;
 		}
 	}
+
+	if (attr->cursor_bar)
+		kmscon_glyph_draw_vbar(&g->buf, attr->width);
+
 	return g;
 }
 
