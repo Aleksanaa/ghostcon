@@ -99,29 +99,28 @@ void pointer_dev_rel(struct input_dev *dev, uint16_t code, int32_t value)
 }
 
 /*
- * A tap has to be short and nearly still. The travel limit is taken from the
- * size of the pad rather than a pixel count, so it means the same thing on a
- * small pad as on a large one: roughly a fortieth of the way across.
+ * Thresholds below are in millimetres, because that is what the hand actually
+ * controls: a pad reports its own resolution, and the few that do not are
+ * assumed to be the usual hundred millimetres across.
  */
 #define TAP_TIMEOUT_MS 180
+#define TAP_TRAVEL_MM 2
+#define DRAG_START_MM 3
+#define SCROLL_STEP_MM 4
+#define ASSUMED_PAD_MM 100
 
-static int32_t tap_travel_limit(struct input_dev *dev)
+static int32_t units_per_mm_x(struct input_dev *dev)
 {
-	int32_t span = dev->pointer.max_x - dev->pointer.min_x;
-
-	return span > 0 ? span / 40 : 0;
+	if (dev->pointer.res_x > 0)
+		return dev->pointer.res_x;
+	return (dev->pointer.max_x - dev->pointer.min_x) / ASSUMED_PAD_MM;
 }
 
-/*
- * How far two fingers travel for one wheel click. A twentieth of the pad gives
- * a full swipe about twenty steps, which lands close to what a mouse wheel
- * does over the same gesture.
- */
-static int32_t scroll_step(struct input_dev *dev)
+static int32_t units_per_mm_y(struct input_dev *dev)
 {
-	int32_t span = dev->pointer.max_y - dev->pointer.min_y;
-
-	return span > 0 ? span / 20 : 0;
+	if (dev->pointer.res_y > 0)
+		return dev->pointer.res_y;
+	return (dev->pointer.max_y - dev->pointer.min_y) / ASSUMED_PAD_MM;
 }
 
 /*
@@ -155,13 +154,44 @@ static bool touch_was_tap(struct input_dev *dev)
 
 	if (dev->pointer.touch_clicked || !dev->pointer.tap_fingers)
 		return false;
-	if (dev->pointer.touch_travel > tap_travel_limit(dev))
+	if (dev->pointer.touch_travel > TAP_TRAVEL_MM * units_per_mm_x(dev))
 		return false;
 
 	clock_gettime(CLOCK_MONOTONIC, &tp);
 	elapsed = (tp.tv_sec - dev->pointer.touch_start.tv_sec) * 1000 +
 		  (tp.tv_nsec - dev->pointer.touch_start.tv_nsec) / 1000000;
 	return elapsed < TAP_TIMEOUT_MS;
+}
+
+/*
+ * Has a held button travelled far enough to mean a drag? Until it has, the
+ * pointer is held still, so the small roll of a finger pressing the pad down
+ * cannot turn a click into a selection.
+ */
+static bool drag_started(struct input_dev *dev)
+{
+	int32_t dx, dy, limit;
+
+	if (!dev->pointer.drag_armed)
+		return true;
+
+	dx = abs(dev->pointer.touch_prev_x - dev->pointer.drag_x);
+	dy = abs(dev->pointer.touch_prev_y - dev->pointer.drag_y);
+	limit = DRAG_START_MM * units_per_mm_x(dev);
+
+	if (dx <= limit && dy <= limit)
+		return false;
+
+	/*
+	 * Let the pointer carry on from where it has been sitting rather than
+	 * leaping the width of the threshold the moment the drag is allowed.
+	 * The offsets are re-anchored here and not through the sync flags,
+	 * which the caller has already passed for this event.
+	 */
+	dev->pointer.drag_armed = false;
+	dev->pointer.off_x = dev->pointer.x - dev->pointer.touch_prev_x;
+	dev->pointer.off_y = dev->pointer.y - dev->pointer.touch_prev_y;
+	return true;
 }
 
 /* A tap is a press and a release in one go, with nothing in between. */
@@ -193,7 +223,7 @@ static void pointer_dev_tap(struct input_dev *dev)
  */
 static void pointer_dev_scroll(struct input_dev *dev, int32_t dy)
 {
-	int32_t step = scroll_step(dev);
+	int32_t step = SCROLL_STEP_MM * units_per_mm_y(dev);
 
 	if (step <= 0)
 		return;
@@ -225,6 +255,10 @@ static void pointer_dev_abs_x(struct input_dev *dev, int32_t value)
 		/* two fingers scroll, and scrolling must not drag the pointer
 		 * along with it */
 		if (dev->pointer.fingers > 1)
+			return;
+
+		/* a button is down but this is still a click, not a drag */
+		if (!drag_started(dev))
 			return;
 
 		if (dev->pointer.touchpaddown) {
@@ -271,6 +305,9 @@ static void pointer_dev_abs_y(struct input_dev *dev, int32_t value)
 			return;
 		}
 
+		if (!drag_started(dev))
+			return;
+
 		if (dev->pointer.touchpaddown) {
 			dev->pointer.y = dev->pointer.off_y + value;
 			if (dev->pointer.y < 0) {
@@ -311,6 +348,17 @@ void pointer_dev_abs(struct input_dev *dev, uint16_t code, int32_t value)
  * primary contact, and its position can be anywhere on the pad. Re-anchor the
  * offset so the pointer carries on from where it is instead of jumping.
  */
+/*
+ * A press starts a click; only travel turns it into a drag. Anchor here so
+ * drag_started() has somewhere to measure from.
+ */
+static void arm_drag(struct input_dev *dev, bool pressed)
+{
+	dev->pointer.drag_armed = pressed;
+	dev->pointer.drag_x = dev->pointer.touch_prev_x;
+	dev->pointer.drag_y = dev->pointer.touch_prev_y;
+}
+
 static void pointer_dev_set_fingers(struct input_dev *dev, uint8_t fingers)
 {
 	if (dev->pointer.fingers == fingers)
@@ -364,6 +412,7 @@ void pointer_dev_button(struct input_dev *dev, uint16_t code, int32_t value)
 			dev->pointer.last_click = tp;
 			dev->pointer.pressed_button = click_button(dev);
 			dev->pointer.touch_clicked = true;
+			arm_drag(dev, true);
 			button = dev->pointer.pressed_button;
 			/* only a plain click starts a selection */
 			if (button != 0)
@@ -379,15 +428,18 @@ void pointer_dev_button(struct input_dev *dev, uint16_t code, int32_t value)
 			if (button == BUTTON_NONE)
 				button = 0;
 			dev->pointer.pressed_button = BUTTON_NONE;
+			arm_drag(dev, false);
 		}
 		pointer_dev_send_button(dev, button, pressed, dbl_click);
 		break;
 	case BTN_RIGHT:
 		dev->pointer.pressed_button = pressed ? 2 : BUTTON_NONE; /* Button 2 = right */
+		arm_drag(dev, pressed);
 		pointer_dev_send_button(dev, 2, pressed, false);
 		break;
 	case BTN_MIDDLE:
 		dev->pointer.pressed_button = pressed ? 1 : BUTTON_NONE; /* Button 1 = middle */
+		arm_drag(dev, pressed);
 		pointer_dev_send_button(dev, 1, pressed, false);
 		break;
 	case BTN_TOUCH:

@@ -79,6 +79,10 @@ struct input_pointer {
 	int32_t min_y;
 	int32_t max_y;
 
+	/* device units per millimetre, 0 when the device does not say */
+	int32_t res_x;
+	int32_t res_y;
+
 	/* Track which button is currently pressed (BUTTON_NONE=none, 0=left, 1=middle, 2=right) */
 	uint8_t pressed_button;
 
@@ -112,6 +116,15 @@ struct input_pointer {
 
 	/* leftover two-finger scroll motion not yet worth a wheel click */
 	int32_t scroll_accum;
+
+	/*
+	 * A button is down but the fingers have not yet travelled far enough
+	 * for it to count as a drag. Pressing a clickpad rolls the finger, so
+	 * without this every click would smear into a drag.
+	 */
+	bool drag_armed;
+	int32_t drag_x;
+	int32_t drag_y;
 };
 
 struct input_dev {

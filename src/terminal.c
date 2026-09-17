@@ -78,6 +78,10 @@ struct kmscon_pointer {
 	int32_t y;
 	unsigned int posx;
 	unsigned int posy;
+	/* cell the button went down on, so that a selection only begins once
+	 * the pointer actually leaves it */
+	unsigned int selx;
+	unsigned int sely;
 	char *copy;
 	int copy_len;
 };
@@ -1163,6 +1167,8 @@ static void handle_pointer_button(struct kmscon_terminal *term, struct input_poi
 				term->pointer.select = true;
 				kmscon_vte_selection_start(term->vte, term->pointer.posx,
 							   term->pointer.posy);
+				term->pointer.selx = term->pointer.posx;
+				term->pointer.sely = term->pointer.posy;
 			}
 		} else {
 			if (term->pointer.select)
@@ -1256,7 +1262,13 @@ static void pointer_event(struct input *input, struct input_pointer_event *ev, v
 	default:
 		break;
 	case POINTER_MOVED:
-		if (term->pointer.select)
+		/*
+		 * Selecting inside a single cell means nothing, and pressing a
+		 * clickpad rolls the finger far enough to cross a pixel or two.
+		 * Wait for the pointer to reach a different cell.
+		 */
+		if (term->pointer.select && (term->pointer.posx != term->pointer.selx ||
+					     term->pointer.posy != term->pointer.sely))
 			kmscon_vte_selection_target(term->vte, term->pointer.posx,
 						    term->pointer.posy);
 		break;
