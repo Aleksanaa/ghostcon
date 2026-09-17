@@ -30,6 +30,8 @@
       palette = "solarized-black";
       sb-size = 4096;
       scrollbar = true;
+      cursor-style = "bar";
+      cursor-color = "#ff8800";
       xkb-layout = "us";
     };
   };

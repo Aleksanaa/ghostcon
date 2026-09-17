@@ -301,6 +301,36 @@
       </varlistentry>
 
       <varlistentry>
+        <term><option>--cursor-style {shape}</option></term>
+        <listitem>
+          <para>Shape of the cursor, one of <literal>block</literal>,
+                <literal>underline</literal>, <literal>bar</literal> or
+                <literal>hollow</literal>. Applications can still pick a
+                different shape with DECSCUSR, this is the shape that a
+                DECSCUSR reset returns to. (default: block)</para>
+        </listitem>
+      </varlistentry>
+
+      <varlistentry>
+        <term><option>--cursor-blink</option></term>
+        <listitem>
+          <para>Let the cursor blink. Applications can override this with
+                DECSCUSR. Note that <option>--no-blink</option> stops all
+                blinking regardless of this option. (default: on)</para>
+        </listitem>
+      </varlistentry>
+
+      <varlistentry>
+        <term><option>--cursor-color {color}</option></term>
+        <listitem>
+          <para>Draw the cursor in <replaceable>color</replaceable> instead of
+                inverting the cell below it. Applications can change this at
+                runtime with OSC 12, which then takes precedence.
+                (default: unset)</para>
+        </listitem>
+      </varlistentry>
+
+      <varlistentry>
         <term><option>--clipboard-write</option></term>
         <listitem>
           <para>Let applications copy into the buffer that a middle-click

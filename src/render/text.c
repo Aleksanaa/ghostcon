@@ -468,13 +468,19 @@ int kmscon_text_draw(struct kmscon_text *txt, struct kmscon_vte *vte, bool curso
 		case KMSCON_CURSOR_UNDERLINE:
 			cursor.cell.attr.underline = !cell->attr.underline;
 			cursor.cell.ch = cell->ch;
+			if (screen.cursor_has_color)
+				cursor.cell.fg = screen.cursor_color;
 			break;
 		case KMSCON_CURSOR_BAR:
 			cursor.cell.ch = FONT_VBAR;
+			if (screen.cursor_has_color)
+				cursor.cell.fg = screen.cursor_color;
 			break;
 		default:
+			/* A block cursor fills the cell, so the glyph has to be
+			 * drawn in the color behind it to stay readable. */
 			cursor.cell.fg = cell->bg;
-			cursor.cell.bg = cell->fg;
+			cursor.cell.bg = screen.cursor_has_color ? screen.cursor_color : cell->fg;
 			cursor.cell.ch = cell->ch;
 			break;
 		}

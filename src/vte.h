@@ -121,6 +121,10 @@ struct kmscon_vte_screen {
 	bool cursor_visible;
 	bool cursor_blinks;
 	enum kmscon_cursor_shape cursor_shape;
+	/* the cursor is drawn by inverting the cell it sits on unless a color
+	 * was configured or requested by the application */
+	bool cursor_has_color;
+	struct kmscon_color cursor_color;
 };
 
 enum kmscon_mouse_event {
@@ -156,6 +160,14 @@ void kmscon_vte_set_copy_cb(struct kmscon_vte *vte, kmscon_vte_copy_cb cb);
 int kmscon_vte_set_palette(struct kmscon_vte *vte, const char *name, const uint8_t (*custom)[3]);
 void kmscon_vte_set_backspace_sends_delete(struct kmscon_vte *vte, bool set);
 void kmscon_vte_set_min_contrast(struct kmscon_vte *vte, double ratio);
+
+/* Defaults for the cursor, applications can still change all of them at
+ * runtime via DECSCUSR and OSC 12. @name is one of "block", "underline",
+ * "bar" or "hollow", a NULL @rgb clears the cursor color again. */
+int kmscon_vte_set_cursor_shape(struct kmscon_vte *vte, const char *name);
+void kmscon_vte_set_cursor_blink(struct kmscon_vte *vte, bool blink);
+void kmscon_vte_set_cursor_color(struct kmscon_vte *vte, const uint8_t rgb[3]);
+
 void kmscon_vte_set_scrollbar(struct kmscon_vte *vte, bool set);
 
 /* Parse a color in any of the formats that libghostty-vt understands, that is

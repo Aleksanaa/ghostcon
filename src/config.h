@@ -111,6 +111,12 @@ struct kmscon_conf_t {
 	bool bell;
 	/* enable cursor and text blinking */
 	bool blink;
+	/* default cursor shape */
+	char *cursor_style;
+	/* let the default cursor blink */
+	bool cursor_blink;
+	/* color of the cursor, NULL inverts the cell below it */
+	char *cursor_color;
 
 	/* Input Options */
 	/* input KBD model */

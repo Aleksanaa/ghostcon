@@ -259,6 +259,33 @@ font-name=Ubuntu Mono
       </varlistentry>
 
       <varlistentry>
+        <term><option>cursor-style</option></term>
+        <listitem>
+          <para>Shape of the cursor, one of <literal>block</literal>,
+                <literal>underline</literal>, <literal>bar</literal> or
+                <literal>hollow</literal>. This is the shape that a DECSCUSR
+                reset returns to. (default: block)</para>
+        </listitem>
+      </varlistentry>
+
+      <varlistentry>
+        <term><option>cursor-blink</option></term>
+        <listitem>
+          <para>Let the cursor blink. Note that <option>blink</option> stops
+                all blinking regardless of this option. (default: on)</para>
+        </listitem>
+      </varlistentry>
+
+      <varlistentry>
+        <term><option>cursor-color</option></term>
+        <listitem>
+          <para>Draw the cursor in this color instead of inverting the cell
+                below it. OSC 12 from an application takes precedence.
+                (default: unset)</para>
+        </listitem>
+      </varlistentry>
+
+      <varlistentry>
         <term><option>clipboard-write</option></term>
         <listitem>
           <para>Let applications copy into the buffer that a middle-click

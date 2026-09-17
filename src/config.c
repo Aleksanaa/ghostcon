@@ -127,6 +127,14 @@ static void print_help()
 		"\t                              Enable bell forwarding to the VT\n"
 		"\t    --blink                 [on]\n"
 		"\t                              Enable or disable cursor/text blinking\n"
+		"\t    --cursor-style <shape>  [block]\n"
+		"\t                              Cursor shape, one of block, underline,\n"
+		"\t                              bar or hollow\n"
+		"\t    --cursor-blink          [on]\n"
+		"\t                              Let the cursor blink\n"
+		"\t    --cursor-color <color>  [-]\n"
+		"\t                              Cursor color, by default the cell below\n"
+		"\t                              the cursor is inverted instead\n"
 		"\n"
 		"Input Options:\n"
 		"\t    --xkb-model <model>        [-]  Set XkbModel for input devices\n"
@@ -822,6 +830,9 @@ int kmscon_conf_new(struct conf_ctx **out)
 		CONF_OPTION_BOOL(0, "clipboard-write", &conf->clipboard_write, true),
 		CONF_OPTION_BOOL(0, "bell", &conf->bell, false),
 		CONF_OPTION_BOOL(0, "blink", &conf->blink, true),
+		CONF_OPTION_STRING(0, "cursor-style", &conf->cursor_style, "block"),
+		CONF_OPTION_BOOL(0, "cursor-blink", &conf->cursor_blink, true),
+		CONF_OPTION_STRING(0, "cursor-color", &conf->cursor_color, NULL),
 
 		/* Input Options */
 		CONF_OPTION_STRING(0, "xkb-model", &conf->xkb_model, NULL),

@@ -1313,6 +1313,18 @@ struct kmscon_terminal *terminal_new(struct kmscon_session *session, unsigned in
 		kmscon_vte_set_copy_cb(term->vte, copy_event);
 	kmscon_vte_set_backspace_sends_delete(term->vte, term->conf->backspace_delete);
 	kmscon_vte_set_min_contrast(term->vte, term->conf->min_contrast);
+	if (kmscon_vte_set_cursor_shape(term->vte, term->conf->cursor_style))
+		log_warning("invalid cursor style '%s', using a block cursor",
+			    term->conf->cursor_style);
+	kmscon_vte_set_cursor_blink(term->vte, term->conf->cursor_blink);
+	if (term->conf->cursor_color) {
+		uint8_t rgb[3];
+
+		if (kmscon_vte_parse_color(term->conf->cursor_color, rgb))
+			log_warning("cannot parse cursor color '%s'", term->conf->cursor_color);
+		else
+			kmscon_vte_set_cursor_color(term->vte, rgb);
+	}
 	kmscon_vte_set_scrollbar(term->vte, term->conf->scrollbar);
 
 	ret = kmscon_vte_set_palette(term->vte, term->conf->palette, term->conf->custom_palette);

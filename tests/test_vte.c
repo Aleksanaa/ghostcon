@@ -464,6 +464,81 @@ static void test_effects(void)
 	kmscon_vte_free(vte);
 }
 
+static void test_cursor(void)
+{
+	struct kmscon_vte_screen screen;
+	struct kmscon_vte *vte;
+	struct sink sink;
+	uint8_t rgb[3] = {0xff, 0x00, 0x88};
+
+	vte = new_vte(&sink);
+
+	/* a block cursor that does not blink is the built-in default */
+	assert(!kmscon_vte_draw(vte, &screen));
+	assert(screen.cursor_shape == KMSCON_CURSOR_BLOCK);
+	assert(!screen.cursor_blinks);
+	assert(!screen.cursor_has_color);
+
+	assert(!kmscon_vte_set_cursor_shape(vte, "bar"));
+	kmscon_vte_set_cursor_blink(vte, true);
+	assert(!kmscon_vte_draw(vte, &screen));
+	assert(screen.cursor_shape == KMSCON_CURSOR_BAR);
+	assert(screen.cursor_blinks);
+
+	assert(!kmscon_vte_set_cursor_shape(vte, "underline"));
+	assert(!kmscon_vte_draw(vte, &screen));
+	assert(screen.cursor_shape == KMSCON_CURSOR_UNDERLINE);
+
+	assert(!kmscon_vte_set_cursor_shape(vte, "hollow"));
+	assert(!kmscon_vte_draw(vte, &screen));
+	assert(screen.cursor_shape == KMSCON_CURSOR_BLOCK_HOLLOW);
+
+	assert(kmscon_vte_set_cursor_shape(vte, "wobbly"));
+
+	/* DECSCUSR wins over the configured default */
+	input_str(vte, "\033[5 q");
+	assert(!kmscon_vte_draw(vte, &screen));
+	assert(screen.cursor_shape == KMSCON_CURSOR_BAR);
+	assert(screen.cursor_blinks);
+
+	input_str(vte, "\033[2 q");
+	assert(!kmscon_vte_draw(vte, &screen));
+	assert(screen.cursor_shape == KMSCON_CURSOR_BLOCK);
+	assert(!screen.cursor_blinks);
+
+	/* and a reset goes back to what we configured */
+	input_str(vte, "\033[0 q");
+	assert(!kmscon_vte_draw(vte, &screen));
+	assert(screen.cursor_shape == KMSCON_CURSOR_BLOCK_HOLLOW);
+	assert(screen.cursor_blinks);
+
+	kmscon_vte_set_cursor_color(vte, rgb);
+	assert(!kmscon_vte_draw(vte, &screen));
+	assert(screen.cursor_has_color);
+	assert(screen.cursor_color.r == 0xff);
+	assert(screen.cursor_color.g == 0x00);
+	assert(screen.cursor_color.b == 0x88);
+
+	/* clearing it goes back to inverting the cell below the cursor */
+	kmscon_vte_set_cursor_color(vte, NULL);
+	assert(!kmscon_vte_draw(vte, &screen));
+	assert(!screen.cursor_has_color);
+
+	/* OSC 12 lets the application pick a color as well */
+	input_str(vte, "\033]12;#00ff00\a");
+	assert(!kmscon_vte_draw(vte, &screen));
+	assert(screen.cursor_has_color);
+	assert(screen.cursor_color.g == 0xff);
+
+	/* that one outlives a change of our default, it is the application's */
+	kmscon_vte_set_cursor_color(vte, NULL);
+	assert(!kmscon_vte_draw(vte, &screen));
+	assert(screen.cursor_has_color);
+	assert(screen.cursor_color.g == 0xff);
+
+	kmscon_vte_free(vte);
+}
+
 static void test_clipboard_write(void)
 {
 	struct kmscon_vte *vte;
@@ -678,6 +753,7 @@ int main(void)
 	test_mouse();
 	test_paste();
 	test_effects();
+	test_cursor();
 	test_clipboard_write();
 	test_focus();
 	test_color_scheme();

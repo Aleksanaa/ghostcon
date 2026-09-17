@@ -729,6 +729,54 @@ void kmscon_vte_set_backspace_sends_delete(struct kmscon_vte *vte, bool set)
 		vte->backspace_sends_delete = set;
 }
 
+int kmscon_vte_set_cursor_shape(struct kmscon_vte *vte, const char *name)
+{
+	GhosttyTerminalCursorStyle style;
+
+	if (!vte)
+		return -EINVAL;
+
+	if (!name || !strcmp(name, "block"))
+		style = GHOSTTY_TERMINAL_CURSOR_STYLE_BLOCK;
+	else if (!strcmp(name, "underline"))
+		style = GHOSTTY_TERMINAL_CURSOR_STYLE_UNDERLINE;
+	else if (!strcmp(name, "bar"))
+		style = GHOSTTY_TERMINAL_CURSOR_STYLE_BAR;
+	else if (!strcmp(name, "hollow"))
+		style = GHOSTTY_TERMINAL_CURSOR_STYLE_BLOCK_HOLLOW;
+	else
+		return -EINVAL;
+
+	ghostty_terminal_set(vte->term, GHOSTTY_TERMINAL_OPT_DEFAULT_CURSOR_STYLE, &style);
+	return 0;
+}
+
+void kmscon_vte_set_cursor_blink(struct kmscon_vte *vte, bool blink)
+{
+	if (!vte)
+		return;
+
+	ghostty_terminal_set(vte->term, GHOSTTY_TERMINAL_OPT_DEFAULT_CURSOR_BLINK, &blink);
+}
+
+void kmscon_vte_set_cursor_color(struct kmscon_vte *vte, const uint8_t rgb[3])
+{
+	GhosttyColorRgb color;
+
+	if (!vte)
+		return;
+
+	if (!rgb) {
+		ghostty_terminal_set(vte->term, GHOSTTY_TERMINAL_OPT_COLOR_CURSOR, NULL);
+		return;
+	}
+
+	color.r = rgb[0];
+	color.g = rgb[1];
+	color.b = rgb[2];
+	ghostty_terminal_set(vte->term, GHOSTTY_TERMINAL_OPT_COLOR_CURSOR, &color);
+}
+
 void kmscon_vte_set_min_contrast(struct kmscon_vte *vte, double ratio)
 {
 	if (!vte)
@@ -1150,6 +1198,19 @@ int kmscon_vte_draw(struct kmscon_vte *vte, struct kmscon_vte_screen *out)
 	out->cursor_visible = cursor_visible && cursor_in_viewport;
 	out->cursor_blinks = cursor_blinking;
 	out->cursor_shape = to_cursor_shape(cursor_style);
+
+	out->cursor_has_color = false;
+	ghostty_render_state_get(vte->render, GHOSTTY_RENDER_STATE_DATA_COLOR_CURSOR_HAS_VALUE,
+				 &out->cursor_has_color);
+	if (out->cursor_has_color) {
+		GhosttyColorRgb rgb;
+
+		if (ghostty_render_state_get(vte->render, GHOSTTY_RENDER_STATE_DATA_COLOR_CURSOR,
+					     &rgb) == GHOSTTY_SUCCESS)
+			out->cursor_color = to_color(rgb);
+		else
+			out->cursor_has_color = false;
+	}
 	return 0;
 }
 
