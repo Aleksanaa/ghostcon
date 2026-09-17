@@ -64,6 +64,11 @@ struct screen {
 	bool pending;
 	bool hw_cursor;
 	bool enabled;
+
+	/* where this screen last painted the mouse pointer */
+	bool pointer_drawn;
+	int32_t pointer_x;
+	int32_t pointer_y;
 };
 
 struct kmscon_pointer {
@@ -144,12 +149,31 @@ static void coord_to_cell(struct kmscon_terminal *term, int32_t x, int32_t y, un
 		*posy = h - 1;
 }
 
-static void draw_pointer(struct screen *scr)
+/*
+ * The pointer is painted over the cells rather than into them, so a frame that
+ * has to move it or take it away cannot be skipped. One that is already on
+ * screen in the right place costs nothing.
+ */
+static bool pointer_needs_frame(struct screen *scr)
 {
 	if (!scr->term->pointer.visible || scr->hw_cursor)
+		return scr->pointer_drawn;
+
+	return !scr->pointer_drawn || scr->pointer_x != scr->term->pointer.x ||
+	       scr->pointer_y != scr->term->pointer.y;
+}
+
+static void draw_pointer(struct screen *scr)
+{
+	if (!scr->term->pointer.visible || scr->hw_cursor) {
+		scr->pointer_drawn = false;
 		return;
+	}
 
 	kmscon_text_draw_pointer(scr->txt, scr->term->pointer.x, scr->term->pointer.y);
+	scr->pointer_x = scr->term->pointer.x;
+	scr->pointer_y = scr->term->pointer.y;
+	scr->pointer_drawn = true;
 }
 
 static inline uint32_t argb(uint8_t a, uint8_t r, uint8_t g, uint8_t b)
@@ -309,7 +333,6 @@ static void disable_screen(struct screen *scr)
 
 static void do_redraw_screen(struct screen *scr)
 {
-	bool force;
 	int ret;
 
 	if (!scr->term->awake || !kmscon_session_get_foreground(scr->term->session))
@@ -324,16 +347,19 @@ static void do_redraw_screen(struct screen *scr)
 
 	scr->pending = false;
 
-	/* The mouse pointer is painted over the cells rather than into them,
-	 * so a frame that shows it can never be skipped. */
-	force = scr->term->pointer.visible && !scr->hw_cursor;
-
-	ret = kmscon_text_prepare(scr->txt, scr->term->vte, force);
+	ret = kmscon_text_prepare(scr->txt, scr->term->vte, pointer_needs_frame(scr));
 	if (ret <= 0)
 		/* the screen already shows this frame, leave it alone */
 		return;
 
-	kmscon_text_draw(scr->txt);
+	ret = kmscon_text_draw(scr->txt);
+	if (ret) {
+		/* Nothing was drawn, so do not put this frame on screen, and
+		 * make sure the next round builds it again. */
+		kmscon_text_invalidate(scr->txt);
+		return;
+	}
+
 	draw_pointer(scr);
 	kmscon_text_render(scr->txt);
 

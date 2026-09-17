@@ -32,7 +32,6 @@
  */
 
 #include <errno.h>
-#include <pthread.h>
 #include <stdlib.h>
 #include <string.h>
 #include "font/font.h"

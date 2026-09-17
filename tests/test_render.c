@@ -8,8 +8,6 @@
 #include <assert.h>
 #include <errno.h>
 #include <stdint.h>
-#include <stdio.h>
-
 #include <string.h>
 #include "../src/render/text.h"
 
@@ -38,11 +36,6 @@ unsigned int kmscon_font_get_height(const struct kmscon_font *font)
 {
 	return FAKE_CELL_H;
 }
-
-/* the last character each glyph request asked for, indexed by nothing in
- * particular: the test only cares that the right ones showed up */
-static uint32_t rendered[4096];
-static unsigned int rendered_len;
 
 struct kmscon_glyph *kmscon_font_render(struct kmscon_font *font, const uint32_t ch)
 {
@@ -100,8 +93,6 @@ int display_clear(struct display *disp, uint8_t r, uint8_t g, uint8_t b)
 int display_blend(struct display *disp, const struct video_blend_req *req)
 {
 	blends++;
-	if (rendered_len < sizeof(rendered) / sizeof(*rendered))
-		rendered[rendered_len++] = req->fr; /* placeholder, see below */
 	return 0;
 }
 void display_set_damage(struct display *disp, size_t n_rect, struct video_rect *damages) {}
@@ -118,17 +109,12 @@ static int round_trip(struct kmscon_text *txt, struct kmscon_vte *vte, bool forc
 	blends = 0;
 	ret = kmscon_text_prepare(txt, vte, force);
 	assert(ret >= 0);
-	if (!ret) {
-		if (getenv("TRACE"))
-			fprintf(stderr, "round: skipped\n");
-		return -1;
-	} /* the round was skipped entirely */
+	if (!ret)
+		return -1; /* the round was skipped entirely */
 
 	assert(!kmscon_text_draw(txt));
 	assert(!kmscon_text_render(txt));
 	swaps++;
-	if (getenv("TRACE"))
-		fprintf(stderr, "round: %u blends\n", blends);
 	return blends;
 }
 

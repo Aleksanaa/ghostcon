@@ -73,7 +73,6 @@ struct bbulk {
 	unsigned int max_y;		/* maximum y offset of the last cell */
 	struct kmscon_screen_attr attr; /* attributes for background color */
 
-	unsigned int requests; /* number of blend calls, for debugging */
 	struct shl_lru *glyphs;
 	struct kmscon_cell *cells;
 	cell_flags_t *cell_flags;
@@ -486,7 +485,6 @@ static int bbulk_draw_cell(struct kmscon_text *txt, const struct kmscon_cell *ce
 	req.buf = &glyph->buf;
 	set_color(&req, cur_cell);
 	display_blend(txt->disp, &req);
-	bb->requests++;
 	return 1;
 }
 
@@ -645,7 +643,6 @@ static int bbulk_draw_pointer(struct kmscon_text *txt, unsigned int pointer_x,
 	req.bg = bb->attr.bg.g;
 	req.bb = bb->attr.bg.b;
 	display_blend(txt->disp, &req);
-	bb->requests++;
 	return 0;
 }
 
@@ -726,7 +723,6 @@ static int bbulk_render(struct kmscon_text *txt)
 	struct bbulk *bb = txt->data;
 	int ret = 0;
 
-	// log_debug("bbulk, redraw %d cells", bb->requests);
 	if (display_supports_damage(txt->disp)) {
 		bbulk_compute_damage(txt);
 		display_set_damage(txt->disp, bb->damage_rect_len, bb->damage_rects);
@@ -740,7 +736,6 @@ static int bbulk_prepare(struct kmscon_text *txt)
 	struct kmscon_screen_attr *attr = &txt->frame.attr;
 	int i;
 
-	bb->requests = 0;
 	bb->damage_rect_len = 0;
 
 	/*
