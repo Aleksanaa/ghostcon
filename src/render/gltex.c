@@ -353,6 +353,16 @@ try_next:
 	gl_clear_error();
 
 	glBindTexture(GL_TEXTURE_2D, atlas->tex);
+
+	/*
+	 * Glyphs go to the screen at their native size, one texel per pixel, so
+	 * there is nothing for a linear filter to interpolate. All it can do is
+	 * pull in the neighbouring glyph in the atlas, or the padding that
+	 * rounding the atlas up to a power of two leaves uninitialised.
+	 */
+	glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MIN_FILTER, GL_NEAREST);
+	glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MAG_FILTER, GL_NEAREST);
+
 	glTexImage2D(GL_TEXTURE_2D, 0, GL_ALPHA, width, height, 0, GL_ALPHA, GL_UNSIGNED_BYTE,
 		     NULL);
 

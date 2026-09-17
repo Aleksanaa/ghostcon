@@ -33,13 +33,21 @@
 uniform mat4 projection;
 uniform float cos;
 uniform float sin;
+uniform float advance_htex;
+uniform float advance_vtex;
 
 attribute vec2 position;
 attribute vec2 texture_position;
 attribute vec3 fgcolor;
 attribute vec3 bgcolor;
 
-varying vec2 texpos;
+/*
+ * The atlas is up to 2048 texels wide and texture_position counts whole
+ * glyph slots, so this coordinate needs more than the 10 bits of mantissa a
+ * mediump float is allowed to have. Scale it here, where the default is
+ * highp, and keep the varying highp all the way into the fragment stage.
+ */
+varying highp vec2 texpos;
 varying vec3 fgcol;
 varying vec3 bgcol;
 
@@ -52,7 +60,8 @@ void main()
 {
 	vec2 rotatedPosition = opRotate(position);
 	gl_Position = projection * vec4(rotatedPosition, 0.0, 1.0);
-	texpos = texture_position;
+	texpos = vec2(texture_position.x * advance_htex,
+		      texture_position.y * advance_vtex);
 	fgcol = fgcolor;
 	bgcol = bgcolor;
 }
