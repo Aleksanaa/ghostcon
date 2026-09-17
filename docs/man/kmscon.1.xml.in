@@ -301,6 +301,20 @@
       </varlistentry>
 
       <varlistentry>
+        <term><option>--clipboard-write</option></term>
+        <listitem>
+          <para>Let applications copy into the buffer that a middle-click
+                pastes from, using OSC 52 or the equivalent iTerm2 sequence.
+                This is what makes copying from an editor or a multiplexer
+                work, including over a remote connection. Note that any
+                program writing to the terminal can replace the buffer this
+                way, so displaying untrusted output may change what a later
+                paste inserts. Clipboard reads are never answered.
+                (default: on)</para>
+        </listitem>
+      </varlistentry>
+
+      <varlistentry>
         <term><option>--bell</option></term>
         <listitem>
           <para>Enable bell forwarding to the VT. When enabled, the BEL character

@@ -136,6 +136,10 @@ typedef void (*kmscon_vte_bell_cb)(void *data);
 typedef void (*kmscon_vte_osc_cb)(const char *osc, size_t len, void *data);
 typedef void (*kmscon_vte_mouse_mode_cb)(bool tracking, void *data);
 
+/* The application asked us to put @u8 into the copy buffer, a @len of zero
+ * asks for the buffer to be cleared. */
+typedef void (*kmscon_vte_copy_cb)(const char *u8, size_t len, void *data);
+
 int kmscon_vte_new(struct kmscon_vte **out, unsigned int cols, unsigned int rows,
 		   unsigned int max_scrollback, void *data);
 void kmscon_vte_free(struct kmscon_vte *vte);
@@ -144,6 +148,10 @@ void kmscon_vte_set_write_cb(struct kmscon_vte *vte, kmscon_vte_write_cb cb);
 void kmscon_vte_set_bell_cb(struct kmscon_vte *vte, kmscon_vte_bell_cb cb);
 void kmscon_vte_set_osc_cb(struct kmscon_vte *vte, kmscon_vte_osc_cb cb);
 void kmscon_vte_set_mouse_mode_cb(struct kmscon_vte *vte, kmscon_vte_mouse_mode_cb cb);
+
+/* Registering a copy callback enables OSC 52, leaving it unset makes the
+ * terminal ignore clipboard writes from applications. */
+void kmscon_vte_set_copy_cb(struct kmscon_vte *vte, kmscon_vte_copy_cb cb);
 
 int kmscon_vte_set_palette(struct kmscon_vte *vte, const char *name, const uint8_t (*custom)[3]);
 void kmscon_vte_set_backspace_sends_delete(struct kmscon_vte *vte, bool set);

@@ -32,6 +32,7 @@
 
 #include <errno.h>
 #include <inttypes.h>
+#include <limits.h>
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
@@ -915,6 +916,26 @@ static void copy_selection(struct kmscon_terminal *term)
 	term->pointer.copy_len = kmscon_vte_selection_copy(term->vte, &term->pointer.copy);
 }
 
+/* An application copied something via OSC 52, put it where a middle-click
+ * paste will find it. */
+static void copy_event(const char *u8, size_t len, void *data)
+{
+	struct kmscon_terminal *term = data;
+	char *buf;
+
+	free_selection(term);
+	if (!len || len > INT_MAX)
+		return;
+
+	buf = malloc(len);
+	if (!buf)
+		return;
+
+	memcpy(buf, u8, len);
+	term->pointer.copy = buf;
+	term->pointer.copy_len = len;
+}
+
 static void forward_pointer_event(struct kmscon_terminal *term, struct input_pointer_event *ev)
 {
 	enum kmscon_mouse_event event;
@@ -1288,6 +1309,8 @@ struct kmscon_terminal *terminal_new(struct kmscon_session *session, unsigned in
 	kmscon_vte_set_osc_cb(term->vte, osc_event);
 	kmscon_vte_set_bell_cb(term->vte, bell_event);
 	kmscon_vte_set_mouse_mode_cb(term->vte, mouse_mode_event);
+	if (term->conf->clipboard_write)
+		kmscon_vte_set_copy_cb(term->vte, copy_event);
 	kmscon_vte_set_backspace_sends_delete(term->vte, term->conf->backspace_delete);
 	kmscon_vte_set_min_contrast(term->vte, term->conf->min_contrast);
 	kmscon_vte_set_scrollbar(term->vte, term->conf->scrollbar);

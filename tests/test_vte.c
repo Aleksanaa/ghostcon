@@ -18,6 +18,9 @@ struct sink {
 	unsigned int osc_calls;
 	char osc[256];
 	bool tracking;
+	unsigned int copy_calls;
+	char copy[256];
+	size_t copy_len;
 };
 
 static void sink_write(const char *u8, size_t len, void *data)
@@ -46,6 +49,18 @@ static void sink_osc(const char *osc, size_t len, void *data)
 	memcpy(sink->osc, osc, len + 1);
 }
 
+static void sink_copy(const char *u8, size_t len, void *data)
+{
+	struct sink *sink = data;
+
+	sink->copy_calls++;
+	assert(len < sizeof(sink->copy));
+	if (len)
+		memcpy(sink->copy, u8, len);
+	sink->copy[len] = 0;
+	sink->copy_len = len;
+}
+
 static void sink_mouse_mode(bool tracking, void *data)
 {
 	struct sink *sink = data;
@@ -67,6 +82,7 @@ static struct kmscon_vte *new_vte(struct sink *sink)
 	kmscon_vte_set_bell_cb(vte, sink_bell);
 	kmscon_vte_set_osc_cb(vte, sink_osc);
 	kmscon_vte_set_mouse_mode_cb(vte, sink_mouse_mode);
+	kmscon_vte_set_copy_cb(vte, sink_copy);
 	kmscon_vte_resize(vte, 20, 5, 8, 16);
 	return vte;
 }
@@ -448,6 +464,45 @@ static void test_effects(void)
 	kmscon_vte_free(vte);
 }
 
+static void test_clipboard_write(void)
+{
+	struct kmscon_vte *vte;
+	struct sink sink;
+
+	vte = new_vte(&sink);
+
+	/* OSC 52 to the standard clipboard, "hello" in base64 */
+	input_str(vte, "\033]52;c;aGVsbG8=\a");
+	assert(sink.copy_calls == 1);
+	assert(sink.copy_len == 5);
+	assert(!strcmp(sink.copy, "hello"));
+
+	/* the primary selection ends up in the same buffer */
+	input_str(vte, "\033]52;p;d29ybGQ=\033\\");
+	assert(sink.copy_calls == 2);
+	assert(!strcmp(sink.copy, "world"));
+
+	/* an empty payload clears the buffer */
+	input_str(vte, "\033]52;c;\a");
+	assert(sink.copy_calls == 3);
+	assert(!sink.copy_len);
+
+	/* a read request is never forwarded to us */
+	input_str(vte, "\033]52;c;?\a");
+	assert(sink.copy_calls == 3);
+
+	/* invalid base64 is rejected before it reaches the callback */
+	input_str(vte, "\033]52;c;!!!!\a");
+	assert(sink.copy_calls == 3);
+
+	/* without a copy callback the terminal ignores clipboard writes */
+	kmscon_vte_set_copy_cb(vte, NULL);
+	input_str(vte, "\033]52;c;aGVsbG8=\a");
+	assert(sink.copy_calls == 3);
+
+	kmscon_vte_free(vte);
+}
+
 static void test_focus(void)
 {
 	struct kmscon_vte *vte;
@@ -623,6 +678,7 @@ int main(void)
 	test_mouse();
 	test_paste();
 	test_effects();
+	test_clipboard_write();
 	test_focus();
 	test_color_scheme();
 	test_min_contrast();

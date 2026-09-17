@@ -105,6 +105,8 @@ struct kmscon_conf_t {
 	unsigned int sb_size;
 	/* show the scroll position while looking at the scroll-back buffer */
 	bool scrollbar;
+	/* let applications write to the copy buffer via OSC 52 */
+	bool clipboard_write;
 	/* enable bell forwarding */
 	bool bell;
 	/* enable cursor and text blinking */

@@ -39,6 +39,11 @@
 #define OSC_MAX 256
 #define ENCODE_MAX 256
 
+/* We can only paste plain text, so this is the representation we look for in
+ * a clipboard write. */
+#define CLIPBOARD_TEXT "text/plain"
+#define CLIPBOARD_TEXT_LEN (sizeof(CLIPBOARD_TEXT) - 1)
+
 enum osc_state {
 	OSC_NONE,
 	OSC_ESC,
@@ -53,6 +58,7 @@ struct kmscon_vte {
 	kmscon_vte_bell_cb bell_cb;
 	kmscon_vte_osc_cb osc_cb;
 	kmscon_vte_mouse_mode_cb mouse_mode_cb;
+	kmscon_vte_copy_cb copy_cb;
 
 	GhosttyTerminal term;
 	GhosttyRenderState render;
@@ -370,6 +376,46 @@ static GhosttyColorScheme get_color_scheme(struct kmscon_vte *vte)
 							    : GHOSTTY_COLOR_SCHEME_LIGHT;
 }
 
+/* OSC 52 and the iTerm2 clipboard commands end up here, already decoded and
+ * with the protocol details normalized away. Reads are never forwarded. */
+static GhosttyClipboardWriteResult clipboard_write_cb(GhosttyTerminal term, void *data,
+						      const GhosttyClipboardWrite *write)
+{
+	struct kmscon_vte *vte = data;
+	const GhosttyClipboardContent *content = NULL;
+	size_t i;
+
+	if (!vte->copy_cb)
+		return GHOSTTY_CLIPBOARD_WRITE_RESULT_UNSUPPORTED;
+
+	/* A clipboard write is a sized struct, so a library that is older than
+	 * the headers we were built against may not have all of our fields. */
+	if (write->size < sizeof(*write))
+		return GHOSTTY_CLIPBOARD_WRITE_RESULT_UNSUPPORTED;
+
+	/* The console has a single copy buffer, so every destination that an
+	 * application may ask for ends up in the same place. */
+	if (!write->contents_len) {
+		vte->copy_cb(NULL, 0, vte->data);
+		return GHOSTTY_CLIPBOARD_WRITE_RESULT_SUCCESS;
+	}
+
+	for (i = 0; i < write->contents_len; ++i) {
+		const GhosttyString *mime = &write->contents[i].mime;
+
+		if (mime->len >= CLIPBOARD_TEXT_LEN &&
+		    !memcmp(mime->ptr, CLIPBOARD_TEXT, CLIPBOARD_TEXT_LEN)) {
+			content = &write->contents[i];
+			break;
+		}
+	}
+	if (!content)
+		return GHOSTTY_CLIPBOARD_WRITE_RESULT_UNSUPPORTED;
+
+	vte->copy_cb((const char *)content->data.ptr, content->data.len, vte->data);
+	return GHOSTTY_CLIPBOARD_WRITE_RESULT_SUCCESS;
+}
+
 static bool color_scheme_cb(GhosttyTerminal term, void *data, GhosttyColorScheme *out)
 {
 	struct kmscon_vte *vte = data;
@@ -519,6 +565,8 @@ int kmscon_vte_new(struct kmscon_vte **out, unsigned int cols, unsigned int rows
 			     (const void *)device_attributes_cb);
 	ghostty_terminal_set(vte->term, GHOSTTY_TERMINAL_OPT_COLOR_SCHEME,
 			     (const void *)color_scheme_cb);
+	ghostty_terminal_set(vte->term, GHOSTTY_TERMINAL_OPT_CLIPBOARD_WRITE,
+			     (const void *)clipboard_write_cb);
 
 	if (ghostty_render_state_new(NULL, &vte->render) != GHOSTTY_SUCCESS) {
 		ret = -ENOMEM;
@@ -617,6 +665,12 @@ void kmscon_vte_set_mouse_mode_cb(struct kmscon_vte *vte, kmscon_vte_mouse_mode_
 {
 	if (vte)
 		vte->mouse_mode_cb = cb;
+}
+
+void kmscon_vte_set_copy_cb(struct kmscon_vte *vte, kmscon_vte_copy_cb cb)
+{
+	if (vte)
+		vte->copy_cb = cb;
 }
 
 int kmscon_vte_set_palette(struct kmscon_vte *vte, const char *name, const uint8_t (*custom)[3])

@@ -120,6 +120,9 @@ static void print_help()
 		"\t    --scrollbar             [off]\n"
 		"\t                              Show the scroll position in the last\n"
 		"\t                              column while viewing the scrollback\n"
+		"\t    --clipboard-write       [on]\n"
+		"\t                              Let applications copy into the buffer\n"
+		"\t                              that middle-click pastes from (OSC 52)\n"
 		"\t    --bell                  [off]\n"
 		"\t                              Enable bell forwarding to the VT\n"
 		"\t    --blink                 [on]\n"
@@ -816,6 +819,7 @@ int kmscon_conf_new(struct conf_ctx **out)
 		CONF_OPTION_BOOL(0, "backspace-delete", &conf->backspace_delete, true),
 		CONF_OPTION_UINT(0, "sb-size", &conf->sb_size, 1000),
 		CONF_OPTION_BOOL(0, "scrollbar", &conf->scrollbar, false),
+		CONF_OPTION_BOOL(0, "clipboard-write", &conf->clipboard_write, true),
 		CONF_OPTION_BOOL(0, "bell", &conf->bell, false),
 		CONF_OPTION_BOOL(0, "blink", &conf->blink, true),
 
