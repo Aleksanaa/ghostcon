@@ -401,96 +401,74 @@ int kmscon_text_rotate(struct kmscon_text *txt, enum Orientation orientation)
 /**
  * kmscon_text_prepare:
  * @txt: valid text renderer
- * @attr: glyph attributes
+ * @vte: terminal to draw
+ * @force: draw even if the terminal did not change
  *
  * This starts a rendering-round. When rendering a console via a text renderer,
- * you have to call this first, then render all your glyphs via
- * kmscon_text_draw() and finally use kmscon_text_render(). If you modify this
- * renderer during rendering or if you activate different OpenGL contexts in
- * between, you need to restart rendering by calling kmscon_text_prepare() again
- * and redoing everything from the beginning.
+ * you have to call this first, then draw the screen via kmscon_text_draw() and
+ * finally use kmscon_text_render(). If you modify this renderer during
+ * rendering or if you activate different OpenGL contexts in between, you need
+ * to restart rendering by calling kmscon_text_prepare() again and redoing
+ * everything from the beginning.
  *
- * Returns: 0 on success, negative error code on failure.
+ * Returns: 1 if there is something to draw, 0 if the screen is already up to
+ * date and this round can be skipped, negative error code on failure.
  */
-int kmscon_text_prepare(struct kmscon_text *txt, struct kmscon_screen_attr *attr, bool blinking)
+int kmscon_text_prepare(struct kmscon_text *txt, struct kmscon_vte *vte, bool force)
 {
-	int ret = 0;
+	int changed, ret = 0;
 
-	if (!txt || !txt->font || !txt->disp)
+	if (!txt || !txt->font || !txt->disp || !vte)
 		return -EINVAL;
 
-	txt->rendering = true;
-	txt->blinking = blinking;
-	if (txt->ops->prepare)
-		ret = txt->ops->prepare(txt, attr);
-	if (ret)
-		txt->rendering = false;
+	changed = kmscon_vte_frame_begin(vte, &txt->watch, &txt->frame);
+	if (changed < 0)
+		return changed;
 
-	return ret;
+	txt->vte = vte;
+	txt->rendering = true;
+	if (txt->ops->prepare)
+		ret = txt->ops->prepare(txt);
+	if (ret < 0) {
+		txt->rendering = false;
+		return ret;
+	}
+
+	/* The backend gets a say because its own state can be stale even when
+	 * the terminal did not move, for instance right after a mode switch or
+	 * while the double buffers still differ. */
+	if (!changed && !force && !ret) {
+		txt->rendering = false;
+		return 0;
+	}
+
+	return 1;
 }
 
 /**
  * kmscon_text_draw:
  * @txt: valid text renderer
- * @vte: valid vte object
  *
- * This draw all cells in the screen.
+ * This draws the frame that kmscon_text_prepare() opened.
  *
- * Returns: 0 on success or negative error code if this glyph couldnt be drawn.
+ * Returns: 0 on success, negative error code on failure.
  */
-int kmscon_text_draw(struct kmscon_text *txt, struct kmscon_vte *vte, bool cursor_blink)
+int kmscon_text_draw(struct kmscon_text *txt)
 {
-	struct kmscon_vte_screen screen;
-	struct kmscon_cursor cursor = {0};
 	int ret;
 
-	if (!txt || !vte)
+	if (!txt || !txt->rendering)
 		return -EINVAL;
 
-	ret = kmscon_vte_draw(vte, &screen);
+	if (txt->frame.cols < txt->cols || txt->frame.rows < txt->rows)
+		return -EINVAL;
+
+	ret = txt->ops->draw(txt);
 	if (ret)
 		return ret;
 
-	if (screen.cols < txt->cols || screen.rows < txt->rows)
-		return -EINVAL;
-
-	cursor.x = screen.cursor_x;
-	cursor.y = screen.cursor_y;
-
-	if (screen.cursor_visible && cursor.x < txt->cols && cursor.y < txt->rows) {
-		const struct kmscon_cell *cell = &screen.cells[cursor.x + cursor.y * screen.cols];
-
-		cursor.visible = !(screen.cursor_blinks && cursor_blink);
-		cursor.cell.fg = cell->fg;
-		cursor.cell.bg = cell->bg;
-
-		switch (screen.cursor_shape) {
-		case KMSCON_CURSOR_UNDERLINE:
-			cursor.cell.attr.underline = !cell->attr.underline;
-			cursor.cell.ch = cell->ch;
-			if (screen.cursor_has_color)
-				cursor.cell.fg = screen.cursor_color;
-			break;
-		case KMSCON_CURSOR_BAR:
-			/* The bar is drawn into the glyph, so the character
-			 * below the cursor stays readable. It shares the color
-			 * of the cell, there is only one per cell. */
-			cursor.cell.attr.cursor_bar = 1;
-			cursor.cell.ch = cell->ch;
-			if (screen.cursor_has_color)
-				cursor.cell.fg = screen.cursor_color;
-			break;
-		default:
-			/* A block cursor fills the cell, so the glyph has to be
-			 * drawn in the color behind it to stay readable. */
-			cursor.cell.fg = cell->bg;
-			cursor.cell.bg = screen.cursor_has_color ? screen.cursor_color : cell->fg;
-			cursor.cell.ch = cell->ch;
-			break;
-		}
-	}
-
-	return txt->ops->draw(txt, screen.cells, &cursor);
+	kmscon_vte_frame_end(txt->vte, &txt->watch);
+	return 0;
 }
 
 /**
@@ -538,21 +516,21 @@ int kmscon_text_render(struct kmscon_text *txt)
 }
 
 /**
- * kmscon_text_abort:
+ * kmscon_text_invalidate:
  * @txt: valid text renderer
  *
- * If you called kmscon_text_prepare() but you want to abort rendering instead
- * of finishing it with kmscon_text_render(), you can safely call this to reset
- * internal state. It is optional to call this or simply restart rendering.
- * Especially if the other renderers return an error, then they probably already
- * aborted rendering and it is not required to call this.
+ * Forget everything this renderer believes is on screen. The next round then
+ * redraws the whole thing, which is what has to happen when a frame was drawn
+ * but never made it to the display, for instance because the swap failed.
  */
-void kmscon_text_abort(struct kmscon_text *txt)
+void kmscon_text_invalidate(struct kmscon_text *txt)
 {
-	if (!txt || !txt->rendering)
+	if (!txt)
 		return;
 
-	if (txt->ops->abort)
-		txt->ops->abort(txt);
-	txt->rendering = false;
+	/* a watch that has seen nothing is handed every row */
+	txt->watch.seq = 0;
+
+	if (txt->ops->invalidate)
+		txt->ops->invalidate(txt);
 }

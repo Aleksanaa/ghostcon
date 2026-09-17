@@ -27,8 +27,12 @@
 /*
  * VT layer
  * This wraps libghostty-vt and provides the terminal state machine, the
- * keyboard and mouse encoders, selection handling and a flattened cell
- * array that the text renderers draw.
+ * keyboard and mouse encoders, selection handling and the frames that the
+ * text renderers draw.
+ *
+ * A frame is pulled row by row, and every row says whether it changed since
+ * the renderer last saw it, so that a renderer which caches what it drew only
+ * pays for the part of the screen that actually moved.
  */
 
 #ifndef KMSCON_VTE_H
@@ -99,13 +103,6 @@ struct kmscon_screen_attr {
 	struct kmscon_color bg;
 };
 
-enum kmscon_cursor_shape {
-	KMSCON_CURSOR_BLOCK,
-	KMSCON_CURSOR_UNDERLINE,
-	KMSCON_CURSOR_BAR,
-	KMSCON_CURSOR_BLOCK_HOLLOW,
-};
-
 /* Position of the viewport inside the scrollback */
 struct kmscon_vte_scrollbar {
 	uint64_t total;	 /* size of the scrollable area in rows */
@@ -113,21 +110,20 @@ struct kmscon_vte_scrollbar {
 	uint64_t len;	 /* number of visible rows */
 };
 
-/* Snapshot of the visible screen, valid until the next kmscon_vte_draw() */
-struct kmscon_vte_screen {
-	const struct kmscon_cell *cells;
+/* A renderer's place in the terminal's history of changes. Several displays
+ * can show the same terminal, so every renderer keeps one of these and learns
+ * from it which rows it still owes a redraw. A zeroed watch has seen nothing
+ * and is handed a full frame. */
+struct kmscon_vte_watch {
+	uint64_t seq;
+};
+
+/* The visible screen, valid from kmscon_vte_frame_begin() until the next one */
+struct kmscon_vte_frame {
 	unsigned int cols;
 	unsigned int rows;
-
-	unsigned int cursor_x;
-	unsigned int cursor_y;
-	bool cursor_visible;
-	bool cursor_blinks;
-	enum kmscon_cursor_shape cursor_shape;
-	/* the cursor is drawn by inverting the cell it sits on unless a color
-	 * was configured or requested by the application */
-	bool cursor_has_color;
-	struct kmscon_color cursor_color;
+	/* default colors, unused parts of the screen are cleared with these */
+	struct kmscon_screen_attr attr;
 };
 
 enum kmscon_mouse_event {
@@ -192,9 +188,35 @@ int kmscon_vte_resize(struct kmscon_vte *vte, unsigned int cols, unsigned int ro
 		      unsigned int cell_width, unsigned int cell_height);
 unsigned int kmscon_vte_get_cols(struct kmscon_vte *vte);
 unsigned int kmscon_vte_get_rows(struct kmscon_vte *vte);
-void kmscon_vte_get_def_attr(struct kmscon_vte *vte, struct kmscon_screen_attr *out);
 
-int kmscon_vte_draw(struct kmscon_vte *vte, struct kmscon_vte_screen *out);
+/* The two blink timers. Every tick flips a phase and marks exactly what that
+ * phase affects as changed, so the next frame repaints only the blinking cells
+ * or the row the cursor is on. The cursor goes solid again while the user is
+ * typing, which is what the reset is for. */
+void kmscon_vte_blink_tick(struct kmscon_vte *vte);
+void kmscon_vte_cursor_blink_tick(struct kmscon_vte *vte);
+void kmscon_vte_cursor_blink_reset(struct kmscon_vte *vte);
+
+/* Pull the terminal into the render state and describe the frame to draw.
+ * Returns 1 when something changed since @watch last drew, 0 when the screen
+ * is unchanged, or a negative error code. A renderer with a reason of its own
+ * to redraw may iterate the frame even when this returns 0. */
+int kmscon_vte_frame_begin(struct kmscon_vte *vte, const struct kmscon_vte_watch *watch,
+			   struct kmscon_vte_frame *out);
+
+/* Walk the rows of the current frame from top to bottom. @dirty tells whether
+ * the row changed since @watch last drew it. */
+bool kmscon_vte_frame_row(struct kmscon_vte *vte, unsigned int *y, bool *dirty);
+
+/* Flatten the current row into @cells, which holds @len entries. At most
+ * frame.cols of them are written. Selection, contrast, blinking, the scrollbar
+ * and the cursor are already folded in, so a renderer only has to turn cells
+ * into glyphs. */
+void kmscon_vte_frame_cells(struct kmscon_vte *vte, struct kmscon_cell *cells, unsigned int len);
+
+/* Remember that @watch has drawn the frame that was just iterated */
+void kmscon_vte_frame_end(struct kmscon_vte *vte, struct kmscon_vte_watch *watch);
+
 void kmscon_vte_get_scrollbar(struct kmscon_vte *vte, struct kmscon_vte_scrollbar *out);
 
 void kmscon_vte_sb_up(struct kmscon_vte *vte, unsigned int num);

@@ -79,6 +79,13 @@ struct bbulk {
 	cell_flags_t *cell_flags;
 	unsigned int cell_count;
 
+	/* one row pulled from the vte, reused for every row */
+	struct kmscon_cell *row;
+	/* rows that still owe the other buffer of the pair a blit, so that a
+	 * row the terminal did not touch can be skipped without extracting a
+	 * single one of its cells */
+	uint8_t *row_pending;
+
 	struct video_rect *damage_rects;
 	unsigned int damage_rect_len;
 	uint8_t redraw;
@@ -108,6 +115,26 @@ static void damage_cell(struct bbulk *bb, unsigned int off)
 {
 	bb->cells[off].ch = ID_DAMAGED;
 	bb->cell_flags[off].damaged = 1;
+}
+
+static void pending_all(struct kmscon_text *txt)
+{
+	struct bbulk *bb = txt->data;
+
+	memset(bb->row_pending, 1, txt->max_rows);
+}
+
+/* Does any row still owe a blit to the buffer that is not on screen? */
+static bool has_pending(struct kmscon_text *txt)
+{
+	struct bbulk *bb = txt->data;
+	unsigned int y;
+
+	for (y = 0; y < txt->rows; ++y)
+		if (bb->row_pending[y])
+			return true;
+
+	return false;
 }
 
 static void compute_border(struct kmscon_text *txt)
@@ -164,20 +191,34 @@ static int bbulk_set(struct kmscon_text *txt)
 	bb->cell_flags = malloc(sizeof(*bb->cell_flags) * bb->cell_count);
 	if (!bb->cell_flags)
 		goto free_prev;
+	memset(bb->cell_flags, 0, sizeof(*bb->cell_flags) * bb->cell_count);
 
 	bb->damage_rects = malloc(sizeof(*bb->damage_rects) * max_damage_rects);
 	if (!bb->damage_rects)
 		goto free_damages;
 
+	bb->row = malloc(sizeof(*bb->row) * txt->max_cols);
+	if (!bb->row)
+		goto free_r_damages;
+
+	bb->row_pending = malloc(txt->max_rows);
+	if (!bb->row_pending)
+		goto free_row;
+
 	for (i = 0; i < (int)bb->cell_count; i++)
 		damage_cell(bb, i);
+	pending_all(txt);
 
 	/* lru size should be at least bb->cells large */
 	bb->glyphs = shl_lru_new(2 * bb->cell_count);
 	if (!bb->glyphs)
-		goto free_r_damages;
+		goto free_pending;
 	return 0;
 
+free_pending:
+	free(bb->row_pending);
+free_row:
+	free(bb->row);
 free_r_damages:
 	free(bb->damage_rects);
 free_damages:
@@ -193,10 +234,14 @@ static void bbulk_unset(struct kmscon_text *txt)
 	struct bbulk *bb = txt->data;
 
 	shl_lru_free(bb->glyphs);
+	free(bb->row_pending);
+	free(bb->row);
 	free(bb->damage_rects);
 	free(bb->cell_flags);
 	free(bb->cells);
 	bb->glyphs = NULL;
+	bb->row_pending = NULL;
+	bb->row = NULL;
 	bb->damage_rects = NULL;
 	bb->cell_flags = NULL;
 	bb->cells = NULL;
@@ -210,6 +255,7 @@ static void bbulk_resize(struct kmscon_text *txt, unsigned int cols, unsigned in
 	txt->rows = rows;
 	compute_border(txt);
 	bb->redraw = 2;
+	pending_all(txt);
 }
 
 static int bbulk_rotate(struct kmscon_text *txt, enum Orientation orientation)
@@ -361,6 +407,10 @@ static void set_color(struct video_blend_req *req, const struct kmscon_cell *cel
 	req->bb = cell->bg.b;
 }
 
+/*
+ * Blit a single cell, unless it is already on screen in both buffers.
+ * Returns 1 if the cell was blitted, 0 if it could be left alone.
+ */
 static int bbulk_draw_cell(struct kmscon_text *txt, const struct kmscon_cell *cell,
 			   unsigned int posx, unsigned int posy)
 {
@@ -437,35 +487,43 @@ static int bbulk_draw_cell(struct kmscon_text *txt, const struct kmscon_cell *ce
 	set_color(&req, cur_cell);
 	display_blend(txt->disp, &req);
 	bb->requests++;
-	return 0;
+	return 1;
 }
 
-static int bbulk_draw(struct kmscon_text *txt, const struct kmscon_cell *cells,
-		      struct kmscon_cursor *cursor)
+static int bbulk_draw(struct kmscon_text *txt)
 {
-	unsigned int posx, posy, off;
+	struct bbulk *bb = txt->data;
+	unsigned int posx, y;
+	bool dirty, pending;
 
-	for (posy = 0; posy < txt->rows; posy++) {
-		for (posx = 0; posx < txt->cols; posx++) {
-			off = posx + posy * txt->cols;
+	while (kmscon_vte_frame_row(txt->vte, &y, &dirty)) {
+		if (y >= txt->rows)
+			break;
 
-			if (cursor->visible && cursor->x == posx && cursor->y == posy)
-				bbulk_draw_cell(txt, &cursor->cell, posx, posy);
-			else if (cells[off].attr.blink && txt->blinking) {
-				struct kmscon_cell cell = cells[off];
+		/*
+		 * A row the terminal did not touch is already on screen and
+		 * costs us nothing at all: the cells behind it are never even
+		 * pulled out of libghostty-vt. The only reason to look at one
+		 * anyway is the buffer that is currently off screen, which
+		 * still has to catch up with the frame before it.
+		 */
+		if (!dirty && !bb->row_pending[y])
+			continue;
 
-				cell.ch = ' ';
-				bbulk_draw_cell(txt, &cell, posx, posy);
-			} else
-				bbulk_draw_cell(txt, &cells[off], posx, posy);
-		}
+		kmscon_vte_frame_cells(txt->vte, bb->row, txt->max_cols);
+
+		pending = false;
+		for (posx = 0; posx < txt->cols; posx++)
+			pending |= bbulk_draw_cell(txt, &bb->row[posx], posx, y) > 0;
+
+		/* whatever was blitted has to be blitted once more, into the
+		 * buffer that is not on screen right now */
+		bb->row_pending[y] = pending;
 	}
+
 	return 0;
 }
 
-/*
- * When the pointer move over, mark the 4 underlying cells as damaged.
- */
 static void mark_damaged(struct kmscon_text *txt, struct bbulk *bb, unsigned int x, unsigned int y)
 {
 	unsigned int posx = 0;
@@ -488,12 +546,15 @@ static void mark_damaged(struct kmscon_text *txt, struct bbulk *bb, unsigned int
 	off = posx + posy * txt->cols;
 
 	damage_cell(bb, off);
+	bb->row_pending[posy] = 1;
 
 	if (posx + 1 < txt->cols)
 		damage_cell(bb, off + 1);
 
-	if (posy + 1 < txt->rows)
+	if (posy + 1 < txt->rows) {
 		damage_cell(bb, off + txt->cols);
+		bb->row_pending[posy + 1] = 1;
+	}
 
 	if (posx + 1 < txt->cols && posy + 1 < txt->rows)
 		damage_cell(bb, off + 1 + txt->cols);
@@ -649,6 +710,17 @@ static void bbulk_compute_damage(struct kmscon_text *txt)
 		}
 	}
 }
+static void bbulk_invalidate(struct kmscon_text *txt)
+{
+	struct bbulk *bb = txt->data;
+	int i;
+
+	for (i = 0; i < (int)bb->cell_count; i++)
+		damage_cell(bb, i);
+	pending_all(txt);
+	bb->redraw = 2;
+}
+
 static int bbulk_render(struct kmscon_text *txt)
 {
 	struct bbulk *bb = txt->data;
@@ -662,9 +734,10 @@ static int bbulk_render(struct kmscon_text *txt)
 	return ret;
 }
 
-static int bbulk_prepare(struct kmscon_text *txt, struct kmscon_screen_attr *attr)
+static int bbulk_prepare(struct kmscon_text *txt)
 {
 	struct bbulk *bb = txt->data;
+	struct kmscon_screen_attr *attr = &txt->frame.attr;
 	int i;
 
 	bb->requests = 0;
@@ -681,8 +754,9 @@ static int bbulk_prepare(struct kmscon_text *txt, struct kmscon_screen_attr *att
 
 	if (bb->redraw) {
 		display_clear(txt->disp, attr->bg.r, attr->bg.g, attr->bg.b);
-		for (i = 0; i < bb->cell_count; i++)
+		for (i = 0; i < (int)bb->cell_count; i++)
 			damage_cell(bb, i);
+		pending_all(txt);
 	} else if (display_has_damage(txt->disp)) {
 		log_debug("Carry over damage from previous frame");
 		for (i = 0; i < bb->cell_count; i++) {
@@ -693,7 +767,9 @@ static int bbulk_prepare(struct kmscon_text *txt, struct kmscon_screen_attr *att
 	if (bb->redraw)
 		bb->redraw--;
 
-	return 0;
+	/* the rows that still owe the off-screen buffer a blit have to be
+	 * drawn even when the terminal itself did not move */
+	return has_pending(txt);
 }
 
 struct kmscon_text_ops kmscon_text_bbulk_ops = {
@@ -709,5 +785,5 @@ struct kmscon_text_ops kmscon_text_bbulk_ops = {
 	.draw = bbulk_draw,
 	.draw_pointer = bbulk_draw_pointer,
 	.render = bbulk_render,
-	.abort = NULL,
+	.invalidate = bbulk_invalidate,
 };

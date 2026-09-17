@@ -15,14 +15,15 @@
       forAllSystems = f: nixpkgs.lib.genAttrs systems (system: f nixpkgs.legacyPackages.${system});
 
       vmSystem =
-        system:
+        system: baseline:
         nixpkgs.lib.nixosSystem {
+          specialArgs = { inherit baseline; };
           modules = [
             "${nixpkgs}/nixos/modules/virtualisation/qemu-vm.nix"
             ./nix/vm.nix
             {
               nixpkgs.hostPlatform = system;
-              nixpkgs.overlays = [ self.overlays.default ];
+              nixpkgs.overlays = nixpkgs.lib.optionals (!baseline) [ self.overlays.default ];
             }
           ];
         };
@@ -40,11 +41,15 @@
         rec {
           kmscon = pkgs.callPackage ./package.nix { };
           default = kmscon;
-          vm = (vmSystem system).config.system.build.vm;
+          vm = (vmSystem system false).config.system.build.vm;
+          vm-baseline = (vmSystem system true).config.system.build.vm;
         }
       );
 
-      nixosConfigurations.vm = vmSystem "x86_64-linux";
+      nixosConfigurations = {
+        vm = vmSystem "x86_64-linux" false;
+        vm-baseline = vmSystem "x86_64-linux" true;
+      };
 
       devShells = forAllSystems (pkgs: {
         default = pkgs.mkShell {

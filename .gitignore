@@ -18,3 +18,5 @@ docs/man/*.5
 docs/man/*.7
 
 /result*
+nixos*.qcow2
+.vmwork/

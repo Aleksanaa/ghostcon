@@ -1,5 +1,6 @@
 /*
- * Lightweight test for kmscon_text_set / kmscon_text_unset.
+ * Lightweight test for kmscon_text_set / kmscon_text_unset and the rule that
+ * decides whether a rendering round happens at all.
  * We avoid linking the whole tree by stubbing external deps.
  */
 
@@ -9,18 +10,33 @@
 #include <string.h>
 #include "../src/render/text.c" /* pull in kmscon_text_set without changing meson */
 
-/* --- Stubs for external functions used by kmscon_text_set --- */
-static struct kmscon_vte_screen fake_screen;
-static bool fake_screen_valid;
+/* --- Stubs for the frame the vte hands out --- */
+static int fake_changed;
+static uint64_t fake_seq;
+static int frame_ends;
 
-int kmscon_vte_draw(struct kmscon_vte *vte, struct kmscon_vte_screen *out)
+int kmscon_vte_frame_begin(struct kmscon_vte *vte, const struct kmscon_vte_watch *watch,
+			   struct kmscon_vte_frame *out)
 {
-	if (!fake_screen_valid)
-		return -EINVAL;
-
-	*out = fake_screen;
-	return 0;
+	memset(out, 0, sizeof(*out));
+	out->cols = 2;
+	out->rows = 1;
+	return fake_changed;
 }
+
+bool kmscon_vte_frame_row(struct kmscon_vte *vte, unsigned int *y, bool *dirty)
+{
+	return false;
+}
+
+void kmscon_vte_frame_cells(struct kmscon_vte *vte, struct kmscon_cell *cells, unsigned int len) {}
+
+void kmscon_vte_frame_end(struct kmscon_vte *vte, struct kmscon_vte_watch *watch)
+{
+	watch->seq = ++fake_seq;
+	frame_ends++;
+}
+
 void kmscon_font_ref(struct kmscon_font *font) {}
 void kmscon_font_unref(struct kmscon_font *font) {}
 void display_ref(struct display *disp) {}
@@ -38,11 +54,16 @@ static void dummy_unset(struct kmscon_text *txt)
 	dummy_unset_calls++;
 }
 
-static struct kmscon_cursor drawn_cursor;
-static int dummy_draw(struct kmscon_text *txt, const struct kmscon_cell *cells,
-		      struct kmscon_cursor *cursor)
+/* what the backend answers when asked whether it has work of its own */
+static int dummy_prepare_ret;
+static int dummy_draws;
+static int dummy_prepare(struct kmscon_text *txt)
 {
-	drawn_cursor = *cursor;
+	return dummy_prepare_ret;
+}
+static int dummy_draw(struct kmscon_text *txt)
+{
+	dummy_draws++;
 	return 0;
 }
 
@@ -53,78 +74,59 @@ static struct kmscon_text_ops dummy_ops = {
 	.destroy = NULL,
 	.set = dummy_set,
 	.unset = dummy_unset,
+	.prepare = dummy_prepare,
 	.draw = dummy_draw,
 };
 
-/* The renderers draw a single glyph per cell, so the cursor has to be folded
- * into the cell below it without losing the character that is there. */
-static void test_cursor_cell(void)
+/*
+ * A frame is only drawn when somebody needs it: the terminal changed, the
+ * backend still has work of its own, or the caller forces one.
+ */
+static void test_skip_clean_frame(void)
 {
-	struct kmscon_cell cells[2];
 	struct kmscon_text txt;
+	struct kmscon_font fake_font;
 	struct kmscon_vte *fake_vte = (struct kmscon_vte *)0x1;
 
 	memset(&txt, 0, sizeof(txt));
+	memset(&fake_font, 0, sizeof(fake_font));
 	txt.ops = &dummy_ops;
-	txt.cols = 2;
-	txt.rows = 1;
+	txt.font = &fake_font;
+	txt.disp = (struct display *)0x1;
 
-	memset(cells, 0, sizeof(cells));
-	cells[0].ch = 'A';
-	cells[0].fg = (struct kmscon_color){0x10, 0x20, 0x30};
-	cells[0].bg = (struct kmscon_color){0x40, 0x50, 0x60};
+	/* nothing changed anywhere, so the whole round is skipped */
+	fake_changed = 0;
+	dummy_prepare_ret = 0;
+	assert(kmscon_text_prepare(&txt, fake_vte, false) == 0);
+	assert(!txt.rendering);
 
-	memset(&fake_screen, 0, sizeof(fake_screen));
-	fake_screen.cells = cells;
-	fake_screen.cols = 2;
-	fake_screen.rows = 1;
-	fake_screen.cursor_visible = true;
-	fake_screen_valid = true;
+	/* the terminal moved */
+	fake_changed = 1;
+	assert(kmscon_text_prepare(&txt, fake_vte, false) == 1);
+	assert(txt.rendering);
+	assert(txt.frame.cols == 2);
 
-	/* a block cursor inverts the cell and keeps the character */
-	fake_screen.cursor_shape = KMSCON_CURSOR_BLOCK;
-	assert(!kmscon_text_draw(&txt, fake_vte, false));
-	assert(drawn_cursor.visible);
-	assert(drawn_cursor.cell.ch == 'A');
-	assert(drawn_cursor.cell.fg.r == 0x40);
-	assert(drawn_cursor.cell.bg.r == 0x10);
-	assert(!drawn_cursor.cell.attr.cursor_bar);
+	/* the backend is behind even though the terminal is not */
+	fake_changed = 0;
+	dummy_prepare_ret = 1;
+	assert(kmscon_text_prepare(&txt, fake_vte, false) == 1);
 
-	/* an underline cursor keeps the character and underlines it */
-	fake_screen.cursor_shape = KMSCON_CURSOR_UNDERLINE;
-	assert(!kmscon_text_draw(&txt, fake_vte, false));
-	assert(drawn_cursor.cell.ch == 'A');
-	assert(drawn_cursor.cell.attr.underline);
-	assert(drawn_cursor.cell.fg.r == 0x10);
+	/* the caller insists, for instance because it paints a mouse pointer */
+	dummy_prepare_ret = 0;
+	assert(kmscon_text_prepare(&txt, fake_vte, true) == 1);
 
-	/* a bar cursor must not hide the character either, the bar is drawn
-	 * into the glyph by the font layer */
-	fake_screen.cursor_shape = KMSCON_CURSOR_BAR;
-	assert(!kmscon_text_draw(&txt, fake_vte, false));
-	assert(drawn_cursor.cell.ch == 'A');
-	assert(drawn_cursor.cell.attr.cursor_bar);
-	assert(!drawn_cursor.cell.attr.underline);
+	/* drawing a frame moves the watch forward */
+	dummy_draws = 0;
+	frame_ends = 0;
+	assert(kmscon_text_draw(&txt) == 0);
+	assert(dummy_draws == 1);
+	assert(frame_ends == 1);
+	assert(txt.watch.seq == fake_seq);
 
-	/* the same for an empty cell, where there is nothing to keep */
-	cells[0].ch = 0;
-	assert(!kmscon_text_draw(&txt, fake_vte, false));
-	assert(drawn_cursor.cell.ch == 0);
-	assert(drawn_cursor.cell.attr.cursor_bar);
-	cells[0].ch = 'A';
-
-	/* a configured cursor color colors the bar */
-	fake_screen.cursor_has_color = true;
-	fake_screen.cursor_color = (struct kmscon_color){0xaa, 0xbb, 0xcc};
-	assert(!kmscon_text_draw(&txt, fake_vte, false));
-	assert(drawn_cursor.cell.fg.r == 0xaa);
-
-	/* and fills a block cursor */
-	fake_screen.cursor_shape = KMSCON_CURSOR_BLOCK;
-	assert(!kmscon_text_draw(&txt, fake_vte, false));
-	assert(drawn_cursor.cell.bg.r == 0xaa);
-	assert(drawn_cursor.cell.fg.r == 0x40);
-
-	fake_screen_valid = false;
+	/* a renderer bigger than the frame it was handed draws nothing */
+	txt.cols = 99;
+	assert(kmscon_text_draw(&txt) == -EINVAL);
+	assert(dummy_draws == 1);
 }
 
 /* The bar is painted into the left edge of the glyph buffer */
@@ -176,7 +178,7 @@ int main(void)
 	assert(ret == -EINVAL);
 	assert(dummy_set_calls == 1); /* not called again */
 
-	test_cursor_cell();
+	test_skip_clean_frame();
 	test_glyph_vbar();
 
 	return 0;

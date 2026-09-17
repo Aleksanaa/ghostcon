@@ -1,4 +1,9 @@
-{ lib, pkgs, ... }:
+{
+  lib,
+  pkgs,
+  baseline ? false,
+  ...
+}:
 {
   users.users.demo = {
     isNormalUser = true;
@@ -11,6 +16,10 @@
   };
   users.users.root.password = "root";
   services.getty.autologinUser = "demo";
+
+  security.sudo.wheelNeedsPassword = false;
+
+  networking.hostName = if baseline then "kmscon-baseline" else "kmscon-ghostcon";
 
   hardware.graphics.enable = true;
 
@@ -47,24 +56,43 @@
       palette-foreground = "cdd6f4";
       palette-background = "1e1e2e";
       sb-size = 4096;
+      xkb-layout = "us";
+    }
+    // lib.optionalAttrs (!baseline) {
       scrollbar = true;
       cursor-style = "bar";
       cursor-color = "f5e0dc";
-      xkb-layout = "us";
     };
   };
 
-  programs.bash.interactiveShellInit = ''
+  programs.bash.interactiveShellInit = lib.optionalString (!baseline) ''
     source ${pkgs.kmscon}/share/kmscon/shell-integration/kmscon-integration.bash
   '';
 
   environment.systemPackages = with pkgs; [
     vttest
+    linuxPackages.perf
+    termbench-pro
+    vtebench
+    notcurses
+    btop
     htop
+    glances
+    fastfetch
+    helix
+    yazi
+    lazygit
+    ncdu
+    tmux
+    chafa
+    bat
+    cmatrix
+    tty-clock
     unicode-emoji
   ];
 
   virtualisation = {
+    diskImage = "./nixos-${if baseline then "baseline" else "ghostcon"}.qcow2";
     memorySize = 2048;
     cores = 2;
     diskSize = 4096;

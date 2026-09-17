@@ -103,8 +103,6 @@ struct kmscon_terminal {
 
 	struct ev_timer *blink_timer;
 	struct ev_timer *blink_cursor;
-	bool blinking;
-	bool cursor_blinking;
 
 	struct kmscon_asciinema *asciinema;
 };
@@ -274,9 +272,9 @@ static void disable_screen(struct screen *scr)
 	int ret;
 
 	log_debug("Disabling screen %s", display_name(scr->disp));
-	if (scr->swapping)
+	if (scr->swapping) {
 		scr->pending = true;
-	else {
+	} else {
 		log_info("Disabling screen %s", display_name(scr->disp));
 		scr->pending = false;
 		display_clear(scr->disp, 0, 0, 0);
@@ -295,9 +293,23 @@ static void disable_screen(struct screen *scr)
 	scr->enabled = false;
 }
 
+/* throwaway instrumentation */
+extern unsigned long long kmscon_stat_reads;
+extern unsigned long long kmscon_stat_bytes;
+extern unsigned long long kmscon_stat_drains;
+static unsigned long long stat_rounds, stat_drawn, stat_skipped;
+static unsigned long long stat_swap_ok, stat_swap_fail, stat_deferred;
+
+static void stat_report(void)
+{
+	log_notice("STAT reads=%llu bytes=%llu drains=%llu rounds=%llu drawn=%llu skipped=%llu swap_ok=%llu swap_fail=%llu deferred=%llu",
+		   kmscon_stat_reads, kmscon_stat_bytes, kmscon_stat_drains, stat_rounds,
+		   stat_drawn, stat_skipped, stat_swap_ok, stat_swap_fail, stat_deferred);
+}
+
 static void do_redraw_screen(struct screen *scr)
 {
-	struct kmscon_screen_attr attr;
+	bool force;
 	int ret;
 
 	if (!scr->term->awake || !kmscon_session_get_foreground(scr->term->session))
@@ -312,9 +324,23 @@ static void do_redraw_screen(struct screen *scr)
 
 	scr->pending = false;
 
-	kmscon_vte_get_def_attr(scr->term->vte, &attr);
-	kmscon_text_prepare(scr->txt, &attr, scr->term->blinking);
-	kmscon_text_draw(scr->txt, scr->term->vte, scr->term->cursor_blinking);
+	/* The mouse pointer is painted over the cells rather than into them,
+	 * so a frame that shows it can never be skipped. */
+	force = scr->term->pointer.visible && !scr->hw_cursor;
+
+	stat_rounds++;
+	ret = kmscon_text_prepare(scr->txt, scr->term->vte, force);
+	if (ret <= 0)
+		stat_skipped++;
+	if (ret <= 0)
+		/* the screen already shows this frame, leave it alone */
+		return;
+
+	stat_drawn++;
+	if (!(stat_drawn % 100))
+		stat_report();
+
+	kmscon_text_draw(scr->txt);
 	draw_pointer(scr);
 	kmscon_text_render(scr->txt);
 
@@ -322,9 +348,16 @@ static void do_redraw_screen(struct screen *scr)
 	if (ret) {
 		if (ret != -EBUSY)
 			log_warning("cannot swap display [%s] %d", display_name(scr->disp), ret);
+
+		/* The frame was drawn but never reached the screen, so the
+		 * renderer must not believe it is up to date. Without this the
+		 * screen would keep whatever it had, forever. */
+		stat_swap_fail++;
+		kmscon_text_invalidate(scr->txt);
 		return;
 	}
 
+	stat_swap_ok++;
 	scr->swapping = true;
 }
 
@@ -333,10 +366,12 @@ static void redraw_screen(struct screen *scr)
 	if (!scr->term->awake || !scr->enabled)
 		return;
 
-	if (scr->swapping)
+	if (scr->swapping) {
+		stat_deferred++;
 		scr->pending = true;
-	else
+	} else {
 		do_redraw_screen(scr);
+	}
 }
 
 static void redraw_all(struct kmscon_terminal *term)
@@ -442,7 +477,7 @@ static void blink_event(struct ev_timer *timer, uint64_t count, void *data)
 	if (!term->awake)
 		return;
 
-	term->blinking = !term->blinking;
+	kmscon_vte_blink_tick(term->vte);
 	redraw_all(term);
 }
 
@@ -453,7 +488,7 @@ static void cursor_blink_event(struct ev_timer *timer, uint64_t count, void *dat
 	if (!term->awake)
 		return;
 
-	term->cursor_blinking = !term->cursor_blinking;
+	kmscon_vte_cursor_blink_tick(term->vte);
 	redraw_all(term);
 }
 
@@ -839,7 +874,7 @@ static void input_event(struct input *input, struct input_key_event *ev, void *d
 	// reset mouse selection on keypress
 	kmscon_vte_selection_reset(term->vte);
 	kmscon_asciinema_stop(term->asciinema);
-	term->cursor_blinking = false;
+	kmscon_vte_cursor_blink_reset(term->vte);
 	ev_timer_update(term->blink_cursor, &blink_interval);
 
 	if (conf_grab_matches(term->conf->grab_scroll_up, ev->mods, ev->num_syms, ev->keysyms)) {
@@ -1258,10 +1293,13 @@ static void pty_input(struct kmscon_pty *pty, const char *u8, size_t len, void *
 {
 	struct kmscon_terminal *term = data;
 
-	if (len) {
+	if (len)
 		kmscon_vte_input(term->vte, u8, len);
-		redraw_all(term);
-	}
+}
+
+static void pty_drained(struct kmscon_pty *pty, void *data)
+{
+	redraw_all(data);
 }
 
 static void pty_exit(struct kmscon_pty *pty, bool restart, void *data)
@@ -1354,7 +1392,7 @@ struct kmscon_terminal *terminal_new(struct kmscon_session *session, unsigned in
 	if (ret)
 		goto err_vte;
 
-	ret = kmscon_pty_new(&term->pty, pty_input, pty_exit, term);
+	ret = kmscon_pty_new(&term->pty, pty_input, pty_drained, pty_exit, term);
 	if (ret)
 		goto err_font;
 

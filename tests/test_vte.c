@@ -69,12 +69,16 @@ static void sink_mouse_mode(bool tracking, void *data)
 	sink->tracking = tracking;
 }
 
+/* one renderer watching the terminal, reset for every new vte */
+static struct kmscon_vte_watch watch;
+
 static struct kmscon_vte *new_vte(struct sink *sink)
 {
 	struct kmscon_vte *vte = NULL;
 	int ret;
 
 	memset(sink, 0, sizeof(*sink));
+	memset(&watch, 0, sizeof(watch));
 	ret = kmscon_vte_new(&vte, 20, 5, 100, sink);
 	assert(!ret);
 	assert(vte);
@@ -93,41 +97,185 @@ static void input_str(struct kmscon_vte *vte, const char *str)
 	kmscon_vte_input(vte, str, strlen(str));
 }
 
-static const struct kmscon_cell *cell_at(struct kmscon_vte_screen *screen, unsigned int x,
-					 unsigned int y)
+/*
+ * The renderers pull a frame row by row and are told which rows changed. The
+ * tests want to look at the whole screen at once, so flatten it here, the way
+ * a renderer without a cache of its own would.
+ */
+#define TEST_COLS 64
+#define TEST_ROWS 32
+
+struct screen {
+	struct kmscon_cell cells[TEST_COLS * TEST_ROWS];
+	unsigned int cols;
+	unsigned int rows;
+	struct kmscon_screen_attr attr;
+
+	/* which rows the vte reported as changed since the previous draw */
+	bool dirty[TEST_ROWS];
+	unsigned int dirty_rows;
+};
+
+/* Returns 1 if the vte had anything new to show, 0 if the frame was clean */
+static int draw(struct kmscon_vte *vte, struct screen *screen)
+{
+	struct kmscon_vte_frame frame;
+	unsigned int y;
+	bool dirty;
+	int changed;
+
+	memset(screen, 0, sizeof(*screen));
+
+	changed = kmscon_vte_frame_begin(vte, &watch, &frame);
+	assert(changed >= 0);
+	assert(frame.cols <= TEST_COLS && frame.rows <= TEST_ROWS);
+
+	screen->cols = frame.cols;
+	screen->rows = frame.rows;
+	screen->attr = frame.attr;
+
+	while (kmscon_vte_frame_row(vte, &y, &dirty)) {
+		kmscon_vte_frame_cells(vte, &screen->cells[y * frame.cols], frame.cols);
+		screen->dirty[y] = dirty;
+		screen->dirty_rows += dirty;
+	}
+
+	kmscon_vte_frame_end(vte, &watch);
+	return changed;
+}
+
+static const struct kmscon_cell *cell_at(struct screen *screen, unsigned int x, unsigned int y)
 {
 	return &screen->cells[x + y * screen->cols];
 }
 
+/*
+ * The cursor is folded into the cell it sits on rather than drawn over it, so
+ * a block cursor shows up as a cell wearing the colors of the screen the wrong
+ * way round.
+ */
+static bool block_cursor_at(struct screen *screen, unsigned int x, unsigned int y)
+{
+	const struct kmscon_cell *cell = cell_at(screen, x, y);
+
+	return !memcmp(&cell->fg, &screen->attr.bg, sizeof(cell->fg)) &&
+	       !memcmp(&cell->bg, &screen->attr.fg, sizeof(cell->bg));
+}
+
 static void test_text_and_cursor(void)
 {
-	struct kmscon_vte_screen screen;
+	struct screen screen;
 	struct kmscon_vte *vte;
 	struct sink sink;
 
 	vte = new_vte(&sink);
 	input_str(vte, "hello\r\nworld");
 
-	assert(!kmscon_vte_draw(vte, &screen));
+	draw(vte, &screen);
 	assert(screen.cols == 20 && screen.rows == 5);
 	assert(cell_at(&screen, 0, 0)->ch == 'h');
 	assert(cell_at(&screen, 4, 0)->ch == 'o');
 	assert(cell_at(&screen, 0, 1)->ch == 'w');
 	assert(cell_at(&screen, 5, 0)->ch == 0);
-	assert(screen.cursor_visible);
-	assert(screen.cursor_x == 5 && screen.cursor_y == 1);
+	/* the cursor sits behind the last character it wrote */
+	assert(block_cursor_at(&screen, 5, 1));
 
 	/* DECTCEM hides the cursor */
 	input_str(vte, "\033[?25l");
-	assert(!kmscon_vte_draw(vte, &screen));
-	assert(!screen.cursor_visible);
+	draw(vte, &screen);
+	assert(!block_cursor_at(&screen, 5, 1));
+
+	kmscon_vte_free(vte);
+}
+
+/*
+ * The heart of the frame model: a renderer is told exactly which rows moved
+ * since it last drew, and nothing more.
+ */
+static void test_dirty_rows(void)
+{
+	struct kmscon_vte_frame frame;
+	struct kmscon_vte_watch late;
+	struct screen screen;
+	struct kmscon_vte *vte;
+	struct sink sink;
+
+	vte = new_vte(&sink);
+
+	/* a renderer that has never drawn is handed the whole screen */
+	assert(draw(vte, &screen) == 1);
+	assert(screen.dirty_rows == screen.rows);
+
+	/* a terminal that stands still costs a renderer nothing */
+	assert(draw(vte, &screen) == 0);
+	assert(screen.dirty_rows == 0);
+
+	/* writing into one line only changes that line */
+	input_str(vte, "hello");
+	assert(draw(vte, &screen) == 1);
+	assert(screen.dirty[0]);
+	assert(screen.dirty_rows == 1);
+
+	/* moving to the next one changes the row the cursor left as well */
+	input_str(vte, "\r\nworld");
+	assert(draw(vte, &screen) == 1);
+	assert(screen.dirty[0] && screen.dirty[1]);
+	assert(screen.dirty_rows == 2);
+
+	/* scrolling moves every row */
+	input_str(vte, "\r\n\r\n\r\n\r\n\r\n\r\n");
+	assert(draw(vte, &screen) == 1);
+	assert(screen.dirty_rows == screen.rows);
+
+	/*
+	 * A second display showing the same terminal keeps its own place in
+	 * the history, so falling behind does not cost it the frame.
+	 */
+	assert(draw(vte, &screen) == 0);
+	memset(&late, 0, sizeof(late));
+	assert(kmscon_vte_frame_begin(vte, &late, &frame) == 1);
+
+	/* selecting inverts cells the terminal itself never touched */
+	kmscon_vte_selection_start(vte, 0, 0);
+	kmscon_vte_selection_target(vte, 4, 0);
+	assert(draw(vte, &screen) == 1);
+	assert(screen.dirty_rows == screen.rows);
+
+	kmscon_vte_free(vte);
+}
+
+/* A blinking cell is blank for half of its period, and only the rows that
+ * hold one are repainted when the phase flips. */
+static void test_blink(void)
+{
+	struct screen screen;
+	struct kmscon_vte *vte;
+	struct sink sink;
+
+	vte = new_vte(&sink);
+	input_str(vte, "\033[5mblink\033[0m");
+
+	draw(vte, &screen);
+	assert(cell_at(&screen, 0, 0)->attr.blink);
+	assert(cell_at(&screen, 0, 0)->ch == 'b');
+
+	kmscon_vte_blink_tick(vte);
+	assert(draw(vte, &screen) == 1);
+	assert(cell_at(&screen, 0, 0)->ch == ' ');
+	assert(screen.dirty[0]);
+	/* the empty rows below hold nothing that blinks */
+	assert(screen.dirty_rows == 1);
+
+	kmscon_vte_blink_tick(vte);
+	assert(draw(vte, &screen) == 1);
+	assert(cell_at(&screen, 0, 0)->ch == 'b');
 
 	kmscon_vte_free(vte);
 }
 
 static void test_attributes(void)
 {
-	struct kmscon_vte_screen screen;
+	struct screen screen;
 	struct kmscon_vte *vte;
 	struct sink sink;
 	struct kmscon_color fg, bg;
@@ -136,13 +284,13 @@ static void test_attributes(void)
 
 	/* default colors come from the legacy palette */
 	input_str(vte, "A");
-	assert(!kmscon_vte_draw(vte, &screen));
+	draw(vte, &screen);
 	assert(cell_at(&screen, 0, 0)->fg.r == 229);
 	assert(cell_at(&screen, 0, 0)->bg.r == 0);
 
 	/* palette colors, bold and underline */
 	input_str(vte, "\033[31;1;4mB");
-	assert(!kmscon_vte_draw(vte, &screen));
+	draw(vte, &screen);
 	assert(cell_at(&screen, 1, 0)->ch == 'B');
 	assert(cell_at(&screen, 1, 0)->fg.r == 205);
 	assert(cell_at(&screen, 1, 0)->fg.g == 0);
@@ -151,7 +299,7 @@ static void test_attributes(void)
 
 	/* true color */
 	input_str(vte, "\033[0;38;2;10;20;30mC");
-	assert(!kmscon_vte_draw(vte, &screen));
+	draw(vte, &screen);
 	assert(cell_at(&screen, 2, 0)->fg.r == 10);
 	assert(cell_at(&screen, 2, 0)->fg.g == 20);
 	assert(cell_at(&screen, 2, 0)->fg.b == 30);
@@ -159,30 +307,30 @@ static void test_attributes(void)
 
 	/* inverse swaps fore- and background */
 	input_str(vte, "\033[0mD");
-	assert(!kmscon_vte_draw(vte, &screen));
+	draw(vte, &screen);
 	fg = cell_at(&screen, 3, 0)->fg;
 	bg = cell_at(&screen, 3, 0)->bg;
 	input_str(vte, "\033[7mE");
-	assert(!kmscon_vte_draw(vte, &screen));
+	draw(vte, &screen);
 	assert(cell_at(&screen, 4, 0)->fg.r == bg.r && cell_at(&screen, 4, 0)->fg.g == bg.g);
 	assert(cell_at(&screen, 4, 0)->bg.r == fg.r && cell_at(&screen, 4, 0)->bg.g == fg.g);
 
 	/* blinking is reported to the renderers */
 	input_str(vte, "\033[0;5mF");
-	assert(!kmscon_vte_draw(vte, &screen));
+	draw(vte, &screen);
 	assert(cell_at(&screen, 5, 0)->attr.blink);
 
 	/* wide characters occupy two cells, the second one stays empty so the
 	 * renderers can treat it as an overflow cell */
 	input_str(vte, "\033[0m\r\n\344\275\240x");
-	assert(!kmscon_vte_draw(vte, &screen));
+	draw(vte, &screen);
 	assert(cell_at(&screen, 0, 1)->ch == 0x4f60);
 	assert(cell_at(&screen, 1, 1)->ch == 0);
 	assert(cell_at(&screen, 2, 1)->ch == 'x');
 
 	/* combining marks are folded into the base cell */
 	input_str(vte, "\r\ne\314\201y");
-	assert(!kmscon_vte_draw(vte, &screen));
+	draw(vte, &screen);
 	assert(cell_at(&screen, 0, 2)->ch == 'e');
 	assert(cell_at(&screen, 1, 2)->ch == 'y');
 
@@ -191,7 +339,7 @@ static void test_attributes(void)
 
 static void test_palette(void)
 {
-	struct kmscon_vte_screen screen;
+	struct screen screen;
 	struct kmscon_vte *vte;
 	struct sink sink;
 	uint8_t custom[KMSCON_COLOR_NUM][3] = {0};
@@ -200,7 +348,7 @@ static void test_palette(void)
 
 	assert(!kmscon_vte_set_palette(vte, "solarized", NULL));
 	input_str(vte, "\033[34mA");
-	assert(!kmscon_vte_draw(vte, &screen));
+	draw(vte, &screen);
 	assert(cell_at(&screen, 0, 0)->fg.r == 38);
 	assert(cell_at(&screen, 0, 0)->fg.g == 139);
 	assert(cell_at(&screen, 0, 0)->fg.b == 210);
@@ -210,7 +358,7 @@ static void test_palette(void)
 	custom[KMSCON_COLOR_BLUE][2] = 3;
 	assert(!kmscon_vte_set_palette(vte, "custom", custom));
 	input_str(vte, "B");
-	assert(!kmscon_vte_draw(vte, &screen));
+	draw(vte, &screen);
 	assert(cell_at(&screen, 1, 0)->fg.r == 1);
 	assert(cell_at(&screen, 1, 0)->fg.g == 2);
 	assert(cell_at(&screen, 1, 0)->fg.b == 3);
@@ -220,32 +368,32 @@ static void test_palette(void)
 
 static void test_scrollback(void)
 {
-	struct kmscon_vte_screen screen;
+	struct screen screen;
 	struct kmscon_vte *vte;
 	struct sink sink;
 
 	vte = new_vte(&sink);
 	input_str(vte, "1\r\n2\r\n3\r\n4\r\n5\r\n6\r\n7");
 
-	assert(!kmscon_vte_draw(vte, &screen));
+	draw(vte, &screen);
 	assert(cell_at(&screen, 0, 4)->ch == '7');
 
 	kmscon_vte_sb_up(vte, 2);
-	assert(!kmscon_vte_draw(vte, &screen));
+	draw(vte, &screen);
 	assert(cell_at(&screen, 0, 4)->ch == '5');
 
 	kmscon_vte_sb_down(vte, 1);
-	assert(!kmscon_vte_draw(vte, &screen));
+	draw(vte, &screen);
 	assert(cell_at(&screen, 0, 4)->ch == '6');
 
 	/* a page up is clamped to the top of the scrollback */
 	kmscon_vte_sb_page_up(vte, 1);
-	assert(!kmscon_vte_draw(vte, &screen));
+	draw(vte, &screen);
 	assert(cell_at(&screen, 0, 0)->ch == '1');
 	assert(cell_at(&screen, 0, 4)->ch == '5');
 
 	kmscon_vte_sb_reset(vte);
-	assert(!kmscon_vte_draw(vte, &screen));
+	draw(vte, &screen);
 	assert(cell_at(&screen, 0, 4)->ch == '7');
 
 	kmscon_vte_free(vte);
@@ -253,7 +401,7 @@ static void test_scrollback(void)
 
 static void test_resize(void)
 {
-	struct kmscon_vte_screen screen;
+	struct screen screen;
 	struct kmscon_vte *vte;
 	struct sink sink;
 
@@ -264,7 +412,7 @@ static void test_resize(void)
 	assert(kmscon_vte_get_cols(vte) == 40);
 	assert(kmscon_vte_get_rows(vte) == 10);
 
-	assert(!kmscon_vte_draw(vte, &screen));
+	draw(vte, &screen);
 	assert(screen.cols == 40 && screen.rows == 10);
 	assert(cell_at(&screen, 0, 0)->ch == 'a');
 
@@ -273,7 +421,7 @@ static void test_resize(void)
 
 static void test_selection(void)
 {
-	struct kmscon_vte_screen screen;
+	struct screen screen;
 	struct kmscon_vte *vte;
 	struct sink sink;
 	char *copy = NULL;
@@ -285,7 +433,7 @@ static void test_selection(void)
 	kmscon_vte_selection_start(vte, 0, 0);
 	kmscon_vte_selection_target(vte, 2, 0);
 
-	assert(!kmscon_vte_draw(vte, &screen));
+	draw(vte, &screen);
 	assert(cell_at(&screen, 0, 0)->fg.r == 0);
 	assert(cell_at(&screen, 0, 0)->bg.r == 229);
 	assert(cell_at(&screen, 3, 0)->bg.r == 0);
@@ -297,7 +445,7 @@ static void test_selection(void)
 	copy = NULL;
 
 	kmscon_vte_selection_reset(vte);
-	assert(!kmscon_vte_draw(vte, &screen));
+	draw(vte, &screen);
 	assert(cell_at(&screen, 0, 0)->bg.r == 0);
 	assert(kmscon_vte_selection_copy(vte, &copy) == 0);
 	assert(!copy);
@@ -478,7 +626,7 @@ static void shell_command(struct kmscon_vte *vte, const char *cmd, const char *o
 
 static void test_shell_integration(void)
 {
-	struct kmscon_vte_screen screen;
+	struct screen screen;
 	struct kmscon_vte *vte;
 	struct sink sink;
 	char *copy = NULL;
@@ -497,25 +645,25 @@ static void test_shell_integration(void)
 
 	/* jumping up puts the previous prompt at the top of the viewport */
 	assert(!kmscon_vte_jump_to_prompt(vte, -1));
-	assert(!kmscon_vte_draw(vte, &screen));
+	draw(vte, &screen);
 	assert(cell_at(&screen, 0, 0)->ch == '$');
 	assert(cell_at(&screen, 2, 0)->ch == 't');
 	assert(cell_at(&screen, 3, 0)->ch == 'h');
 
 	/* and again for the prompt above that one, output lines are skipped */
 	assert(!kmscon_vte_jump_to_prompt(vte, -1));
-	assert(!kmscon_vte_draw(vte, &screen));
+	draw(vte, &screen);
 	assert(cell_at(&screen, 2, 0)->ch == 't');
 	assert(cell_at(&screen, 3, 0)->ch == 'w');
 
 	/* jumping back down returns to the later prompt */
 	assert(!kmscon_vte_jump_to_prompt(vte, 1));
-	assert(!kmscon_vte_draw(vte, &screen));
+	draw(vte, &screen);
 	assert(cell_at(&screen, 3, 0)->ch == 'h');
 
 	/* running out of prompts is reported and the viewport does not move */
 	assert(kmscon_vte_jump_to_prompt(vte, -100) == -ENOENT);
-	assert(!kmscon_vte_draw(vte, &screen));
+	draw(vte, &screen);
 	assert(cell_at(&screen, 3, 0)->ch == 'h');
 
 	assert(kmscon_vte_jump_to_prompt(vte, 0) == -EINVAL);
@@ -532,9 +680,13 @@ static void test_shell_integration(void)
 	kmscon_vte_free(vte);
 }
 
+/*
+ * The cursor is folded into the cell it sits on, so every shape, color and
+ * blink phase is checked on that cell rather than on a flag.
+ */
 static void test_cursor(void)
 {
-	struct kmscon_vte_screen screen;
+	struct screen screen;
 	struct kmscon_vte *vte;
 	struct sink sink;
 	uint8_t rgb[3] = {0xff, 0x00, 0x88};
@@ -542,67 +694,81 @@ static void test_cursor(void)
 	vte = new_vte(&sink);
 
 	/* a block cursor that does not blink is the built-in default */
-	assert(!kmscon_vte_draw(vte, &screen));
-	assert(screen.cursor_shape == KMSCON_CURSOR_BLOCK);
-	assert(!screen.cursor_blinks);
-	assert(!screen.cursor_has_color);
+	draw(vte, &screen);
+	assert(block_cursor_at(&screen, 0, 0));
+	kmscon_vte_cursor_blink_tick(vte);
+	draw(vte, &screen);
+	assert(block_cursor_at(&screen, 0, 0));
+	kmscon_vte_cursor_blink_reset(vte);
 
 	assert(!kmscon_vte_set_cursor_shape(vte, "bar"));
 	kmscon_vte_set_cursor_blink(vte, true);
-	assert(!kmscon_vte_draw(vte, &screen));
-	assert(screen.cursor_shape == KMSCON_CURSOR_BAR);
-	assert(screen.cursor_blinks);
+	draw(vte, &screen);
+	assert(cell_at(&screen, 0, 0)->attr.cursor_bar);
+
+	/* half of a blinking cursor's period has no cursor in it at all */
+	kmscon_vte_cursor_blink_tick(vte);
+	draw(vte, &screen);
+	assert(!cell_at(&screen, 0, 0)->attr.cursor_bar);
+	kmscon_vte_cursor_blink_reset(vte);
 
 	assert(!kmscon_vte_set_cursor_shape(vte, "underline"));
-	assert(!kmscon_vte_draw(vte, &screen));
-	assert(screen.cursor_shape == KMSCON_CURSOR_UNDERLINE);
+	draw(vte, &screen);
+	assert(cell_at(&screen, 0, 0)->attr.underline);
+	assert(!cell_at(&screen, 0, 0)->attr.cursor_bar);
 
 	assert(!kmscon_vte_set_cursor_shape(vte, "hollow"));
-	assert(!kmscon_vte_draw(vte, &screen));
-	assert(screen.cursor_shape == KMSCON_CURSOR_BLOCK_HOLLOW);
+	draw(vte, &screen);
+	assert(block_cursor_at(&screen, 0, 0));
 
 	assert(kmscon_vte_set_cursor_shape(vte, "wobbly"));
 
 	/* DECSCUSR wins over the configured default */
 	input_str(vte, "\033[5 q");
-	assert(!kmscon_vte_draw(vte, &screen));
-	assert(screen.cursor_shape == KMSCON_CURSOR_BAR);
-	assert(screen.cursor_blinks);
+	draw(vte, &screen);
+	assert(cell_at(&screen, 0, 0)->attr.cursor_bar);
 
 	input_str(vte, "\033[2 q");
-	assert(!kmscon_vte_draw(vte, &screen));
-	assert(screen.cursor_shape == KMSCON_CURSOR_BLOCK);
-	assert(!screen.cursor_blinks);
+	draw(vte, &screen);
+	assert(block_cursor_at(&screen, 0, 0));
+	/* DECSCUSR 2 is the steady variant, so the blink phase changes nothing */
+	kmscon_vte_cursor_blink_tick(vte);
+	draw(vte, &screen);
+	assert(block_cursor_at(&screen, 0, 0));
+	kmscon_vte_cursor_blink_reset(vte);
 
 	/* and a reset goes back to what we configured */
 	input_str(vte, "\033[0 q");
-	assert(!kmscon_vte_draw(vte, &screen));
-	assert(screen.cursor_shape == KMSCON_CURSOR_BLOCK_HOLLOW);
-	assert(screen.cursor_blinks);
+	draw(vte, &screen);
+	assert(block_cursor_at(&screen, 0, 0));
 
+	assert(!kmscon_vte_set_cursor_shape(vte, "bar"));
 	kmscon_vte_set_cursor_color(vte, rgb);
-	assert(!kmscon_vte_draw(vte, &screen));
-	assert(screen.cursor_has_color);
-	assert(screen.cursor_color.r == 0xff);
-	assert(screen.cursor_color.g == 0x00);
-	assert(screen.cursor_color.b == 0x88);
+	draw(vte, &screen);
+	assert(cell_at(&screen, 0, 0)->fg.r == 0xff);
+	assert(cell_at(&screen, 0, 0)->fg.g == 0x00);
+	assert(cell_at(&screen, 0, 0)->fg.b == 0x88);
+
+	/* a block cursor is filled with that color instead */
+	assert(!kmscon_vte_set_cursor_shape(vte, "block"));
+	draw(vte, &screen);
+	assert(cell_at(&screen, 0, 0)->bg.r == 0xff);
+	assert(cell_at(&screen, 0, 0)->bg.b == 0x88);
 
 	/* clearing it goes back to inverting the cell below the cursor */
 	kmscon_vte_set_cursor_color(vte, NULL);
-	assert(!kmscon_vte_draw(vte, &screen));
-	assert(!screen.cursor_has_color);
+	draw(vte, &screen);
+	assert(block_cursor_at(&screen, 0, 0));
 
 	/* OSC 12 lets the application pick a color as well */
 	input_str(vte, "\033]12;#00ff00\a");
-	assert(!kmscon_vte_draw(vte, &screen));
-	assert(screen.cursor_has_color);
-	assert(screen.cursor_color.g == 0xff);
+	draw(vte, &screen);
+	assert(cell_at(&screen, 0, 0)->bg.g == 0xff);
 
 	/* that one outlives a change of our default, it is the application's */
 	kmscon_vte_set_cursor_color(vte, NULL);
-	assert(!kmscon_vte_draw(vte, &screen));
-	assert(screen.cursor_has_color);
-	assert(screen.cursor_color.g == 0xff);
+	draw(vte, &screen);
+	assert(cell_at(&screen, 0, 0)->bg.g == 0xff);
 
 	kmscon_vte_free(vte);
 }
@@ -705,7 +871,7 @@ static void test_color_scheme(void)
 
 static void test_min_contrast(void)
 {
-	struct kmscon_vte_screen screen;
+	struct screen screen;
 	struct kmscon_vte *vte;
 	struct sink sink;
 
@@ -713,23 +879,23 @@ static void test_min_contrast(void)
 
 	/* black on black is unreadable, but is left alone by default */
 	input_str(vte, "\033[30;40mA");
-	assert(!kmscon_vte_draw(vte, &screen));
+	draw(vte, &screen);
 	assert(cell_at(&screen, 0, 0)->fg.r == 0);
 	assert(cell_at(&screen, 0, 0)->bg.r == 0);
 
 	kmscon_vte_set_min_contrast(vte, 4.5);
-	assert(!kmscon_vte_draw(vte, &screen));
+	draw(vte, &screen);
 	assert(cell_at(&screen, 0, 0)->fg.r == 0xff);
 	assert(cell_at(&screen, 0, 0)->bg.r == 0);
 
 	/* white on black already has the highest contrast there is */
 	input_str(vte, "\033[37;40mB");
-	assert(!kmscon_vte_draw(vte, &screen));
+	draw(vte, &screen);
 	assert(cell_at(&screen, 1, 0)->fg.r == 229);
 
 	/* on a light background the text is pushed to black instead */
 	input_str(vte, "\033[30;47mC");
-	assert(!kmscon_vte_draw(vte, &screen));
+	draw(vte, &screen);
 	assert(cell_at(&screen, 2, 0)->fg.r == 0);
 	assert(cell_at(&screen, 2, 0)->bg.r == 229);
 
@@ -759,7 +925,7 @@ static void test_parse_color(void)
 static void test_scrollbar(void)
 {
 	struct kmscon_vte_scrollbar sb;
-	struct kmscon_vte_screen screen;
+	struct screen screen;
 	struct kmscon_vte *vte;
 	struct sink sink;
 
@@ -773,11 +939,11 @@ static void test_scrollbar(void)
 
 	/* the last column is only taken over once it is enabled */
 	kmscon_vte_sb_up(vte, 2);
-	assert(!kmscon_vte_draw(vte, &screen));
+	draw(vte, &screen);
 	assert(cell_at(&screen, 19, 0)->ch == 0);
 
 	kmscon_vte_set_scrollbar(vte, true);
-	assert(!kmscon_vte_draw(vte, &screen));
+	draw(vte, &screen);
 	assert(cell_at(&screen, 19, 0)->ch == 0x2588);
 	assert(cell_at(&screen, 19, 4)->ch == 0x2502);
 
@@ -786,7 +952,7 @@ static void test_scrollbar(void)
 
 	/* back at the bottom the column belongs to the terminal again */
 	kmscon_vte_sb_reset(vte);
-	assert(!kmscon_vte_draw(vte, &screen));
+	draw(vte, &screen);
 	assert(cell_at(&screen, 19, 0)->ch == 0);
 
 	kmscon_vte_free(vte);
@@ -794,7 +960,7 @@ static void test_scrollbar(void)
 
 static void test_reset(void)
 {
-	struct kmscon_vte_screen screen;
+	struct screen screen;
 	struct kmscon_vte *vte;
 	struct sink sink;
 
@@ -802,9 +968,9 @@ static void test_reset(void)
 	input_str(vte, "\033[?25labc");
 
 	kmscon_vte_hard_reset(vte);
-	assert(!kmscon_vte_draw(vte, &screen));
+	draw(vte, &screen);
 	assert(cell_at(&screen, 0, 0)->ch == 0);
-	assert(screen.cursor_visible);
+	assert(block_cursor_at(&screen, 0, 0));
 
 	kmscon_vte_free(vte);
 }
@@ -812,6 +978,8 @@ static void test_reset(void)
 int main(void)
 {
 	test_text_and_cursor();
+	test_dirty_rows();
+	test_blink();
 	test_attributes();
 	test_palette();
 	test_scrollback();

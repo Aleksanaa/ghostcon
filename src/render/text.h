@@ -66,14 +66,12 @@ struct kmscon_text {
 	unsigned int max_rows;
 	bool rendering;
 	enum Orientation orientation;
-	bool blinking;
-};
 
-struct kmscon_cursor {
-	struct kmscon_cell cell;
-	unsigned int x;
-	unsigned int y;
-	bool visible;
+	/* where this renderer stands in the terminal's history of changes,
+	 * and the frame it is currently drawing */
+	struct kmscon_vte *vte;
+	struct kmscon_vte_watch watch;
+	struct kmscon_vte_frame frame;
 };
 
 struct kmscon_text_ops {
@@ -85,12 +83,23 @@ struct kmscon_text_ops {
 	void (*unset)(struct kmscon_text *txt);
 	void (*resize)(struct kmscon_text *txt, unsigned int cols, unsigned int rows);
 	int (*rotate)(struct kmscon_text *txt, enum Orientation orientation);
-	int (*prepare)(struct kmscon_text *txt, struct kmscon_screen_attr *attr);
-	int (*draw)(struct kmscon_text *txt, const struct kmscon_cell *cells,
-		    struct kmscon_cursor *cursor);
+	/*
+	 * Returns 1 if the backend has to redraw even though the terminal did
+	 * not change, 0 if it is happy to skip a clean frame.
+	 *
+	 * A clean frame is not drawn and therefore never reaches the display,
+	 * so a backend whose buffers went stale for a reason of its own has to
+	 * say so here or the screen stays as it was. That covers at least a
+	 * display asking for a redraw after a mode switch, a resize, a
+	 * rotation, and the frames owed to the second buffer of the pair.
+	 */
+	int (*prepare)(struct kmscon_text *txt);
+	/* Pull txt->vte with kmscon_vte_frame_row() and draw what is needed. */
+	int (*draw)(struct kmscon_text *txt);
 	int (*draw_pointer)(struct kmscon_text *txt, unsigned int x, unsigned int y);
 	int (*render)(struct kmscon_text *txt);
-	void (*abort)(struct kmscon_text *txt);
+	/* Throw away whatever the backend believes is on screen. */
+	void (*invalidate)(struct kmscon_text *txt);
 };
 
 #define FONT_WIDTH(txt) ((txt)->font->attr.width)
@@ -112,11 +121,17 @@ enum Orientation kmscon_text_get_orientation(struct kmscon_text *txt);
 void kmscon_text_resize(struct kmscon_text *txt, unsigned int cols, unsigned int rows);
 int kmscon_text_rotate(struct kmscon_text *txt, enum Orientation orientation);
 
-int kmscon_text_prepare(struct kmscon_text *txt, struct kmscon_screen_attr *attr, bool blinking);
-int kmscon_text_draw(struct kmscon_text *txt, struct kmscon_vte *vte, bool cursor_blink);
+/* Open a rendering round on @vte. Returns 1 when there is something to draw,
+ * 0 when the screen is already up to date and the whole round can be skipped,
+ * or a negative error code. @force asks for a frame even if nothing changed. */
+int kmscon_text_prepare(struct kmscon_text *txt, struct kmscon_vte *vte, bool force);
+int kmscon_text_draw(struct kmscon_text *txt);
 int kmscon_text_draw_pointer(struct kmscon_text *txt, unsigned int x, unsigned int y);
 int kmscon_text_render(struct kmscon_text *txt);
-void kmscon_text_abort(struct kmscon_text *txt);
+
+/* The frame that was just drawn never reached the screen, so forget that it
+ * was ever drawn and build the next one from scratch. */
+void kmscon_text_invalidate(struct kmscon_text *txt);
 
 /* modularized backends */
 

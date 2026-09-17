@@ -44,6 +44,24 @@
 #define CLIPBOARD_TEXT "text/plain"
 #define CLIPBOARD_TEXT_LEN (sizeof(CLIPBOARD_TEXT) - 1)
 
+/* What a frame shows of the cursor. Any change to it repaints the row the
+ * cursor left and the one it entered. */
+struct cursor_state {
+	unsigned int x;
+	unsigned int y;
+	bool visible;
+	bool has_color;
+	struct kmscon_color color;
+	GhosttyRenderStateCursorVisualStyle style;
+};
+
+/* Geometry of the scroll indicator in the last column, in rows */
+struct scrollbar_state {
+	bool on;
+	unsigned int start;
+	unsigned int len;
+};
+
 enum osc_state {
 	OSC_NONE,
 	OSC_ESC,
@@ -70,10 +88,23 @@ struct kmscon_vte {
 	GhosttyMouseEvent mouse_ev;
 	GhosttyTrackedGridRef sel_anchor;
 
-	struct kmscon_cell *cells;
-	size_t cells_count;
 	uint32_t *graphemes;
 	size_t graphemes_count;
+
+	/* the frame that the renderers pull, see the rendering section */
+	uint64_t seq;
+	uint64_t *row_seq;
+	uint8_t *row_blink;
+	unsigned int row_count;
+	GhosttyRenderStateColors colors;
+	struct cursor_state cursor;
+	struct scrollbar_state sb;
+	unsigned int frame_cols;
+	unsigned int frame_rows;
+	unsigned int frame_y;
+	uint64_t frame_seen;
+	bool blink;
+	bool cursor_phase;
 
 	unsigned int cols;
 	unsigned int rows_num;
@@ -92,6 +123,11 @@ struct kmscon_vte {
 	char osc_buf[OSC_MAX];
 	size_t osc_len;
 };
+
+/* Stamp rows as changed so that the next frame redraws them. Both live with
+ * the rest of the rendering code further down. */
+static void mark_dirty_all(struct kmscon_vte *vte);
+static void mark_dirty_row(struct kmscon_vte *vte, unsigned int y);
 
 /*
  * Color palettes
@@ -639,7 +675,8 @@ void kmscon_vte_free(struct kmscon_vte *vte)
 	ghostty_render_state_free(vte->render);
 	ghostty_terminal_free(vte->term);
 	free(vte->graphemes);
-	free(vte->cells);
+	free(vte->row_seq);
+	free(vte->row_blink);
 	free(vte);
 }
 
@@ -704,6 +741,7 @@ int kmscon_vte_set_palette(struct kmscon_vte *vte, const char *name, const uint8
 	ghostty_terminal_set(vte->term, GHOSTTY_TERMINAL_OPT_COLOR_BACKGROUND, &bg);
 
 	report_color_scheme(vte);
+	mark_dirty_all(vte);
 	return 0;
 }
 
@@ -748,6 +786,7 @@ int kmscon_vte_set_cursor_shape(struct kmscon_vte *vte, const char *name)
 		return -EINVAL;
 
 	ghostty_terminal_set(vte->term, GHOSTTY_TERMINAL_OPT_DEFAULT_CURSOR_STYLE, &style);
+	mark_dirty_all(vte);
 	return 0;
 }
 
@@ -757,6 +796,7 @@ void kmscon_vte_set_cursor_blink(struct kmscon_vte *vte, bool blink)
 		return;
 
 	ghostty_terminal_set(vte->term, GHOSTTY_TERMINAL_OPT_DEFAULT_CURSOR_BLINK, &blink);
+	mark_dirty_all(vte);
 }
 
 void kmscon_vte_set_cursor_color(struct kmscon_vte *vte, const uint8_t rgb[3])
@@ -768,6 +808,7 @@ void kmscon_vte_set_cursor_color(struct kmscon_vte *vte, const uint8_t rgb[3])
 
 	if (!rgb) {
 		ghostty_terminal_set(vte->term, GHOSTTY_TERMINAL_OPT_COLOR_CURSOR, NULL);
+		mark_dirty_all(vte);
 		return;
 	}
 
@@ -775,6 +816,7 @@ void kmscon_vte_set_cursor_color(struct kmscon_vte *vte, const uint8_t rgb[3])
 	color.g = rgb[1];
 	color.b = rgb[2];
 	ghostty_terminal_set(vte->term, GHOSTTY_TERMINAL_OPT_COLOR_CURSOR, &color);
+	mark_dirty_all(vte);
 }
 
 void kmscon_vte_set_min_contrast(struct kmscon_vte *vte, double ratio)
@@ -788,12 +830,16 @@ void kmscon_vte_set_min_contrast(struct kmscon_vte *vte, double ratio)
 		ratio = 21.0;
 
 	vte->min_contrast = ratio;
+	mark_dirty_all(vte);
 }
 
 void kmscon_vte_set_scrollbar(struct kmscon_vte *vte, bool set)
 {
-	if (vte)
-		vte->scrollbar = set;
+	if (!vte || vte->scrollbar == set)
+		return;
+
+	vte->scrollbar = set;
+	mark_dirty_all(vte);
 }
 
 void kmscon_vte_input(struct kmscon_vte *vte, const char *u8, size_t len)
@@ -860,6 +906,7 @@ void kmscon_vte_hard_reset(struct kmscon_vte *vte)
 	vte->osc_state = OSC_NONE;
 	vte->osc_len = 0;
 	update_mouse_mode(vte);
+	mark_dirty_all(vte);
 }
 
 void kmscon_vte_paste(struct kmscon_vte *vte, const char *u8, size_t len)
@@ -912,6 +959,7 @@ int kmscon_vte_resize(struct kmscon_vte *vte, unsigned int cols, unsigned int ro
 
 	vte->cols = cols;
 	vte->rows_num = rows;
+	mark_dirty_all(vte);
 	return 0;
 }
 
@@ -925,40 +973,60 @@ unsigned int kmscon_vte_get_rows(struct kmscon_vte *vte)
 	return vte ? vte->rows_num : 0;
 }
 
-void kmscon_vte_get_def_attr(struct kmscon_vte *vte, struct kmscon_screen_attr *out)
-{
-	GhosttyColorRgb fg = {0xff, 0xff, 0xff};
-	GhosttyColorRgb bg = {0, 0, 0};
-
-	if (!vte || !out)
-		return;
-
-	ghostty_terminal_get(vte->term, GHOSTTY_TERMINAL_DATA_COLOR_FOREGROUND, &fg);
-	ghostty_terminal_get(vte->term, GHOSTTY_TERMINAL_DATA_COLOR_BACKGROUND, &bg);
-
-	out->fg.r = fg.r;
-	out->fg.g = fg.g;
-	out->fg.b = fg.b;
-	out->bg.r = bg.r;
-	out->bg.g = bg.g;
-	out->bg.b = bg.b;
-}
-
 /* rendering */
 
-static int alloc_cells(struct kmscon_vte *vte, size_t count)
-{
-	struct kmscon_cell *cells;
+/*
+ * The renderers pull the screen one row at a time and remember what they drew,
+ * so the vte has to be able to answer "what changed since you last looked?".
+ * Every change bumps a sequence number and stamps the rows it touched with it;
+ * a renderer only has to compare its own watch against those stamps.
+ *
+ * libghostty-vt tracks dirtiness for the terminal itself, and frame_begin()
+ * folds that into the stamps. The rest of the bookkeeping covers what kmscon
+ * paints on top of a cell and libghostty-vt therefore knows nothing about: the
+ * cursor, the two blink phases and the scroll indicator.
+ */
 
-	if (vte->cells_count >= count)
+static void mark_dirty_all(struct kmscon_vte *vte)
+{
+	uint64_t seq = ++vte->seq;
+	unsigned int y;
+
+	for (y = 0; y < vte->row_count; ++y)
+		vte->row_seq[y] = seq;
+}
+
+static void mark_dirty_row(struct kmscon_vte *vte, unsigned int y)
+{
+	if (y < vte->row_count)
+		vte->row_seq[y] = ++vte->seq;
+}
+
+static int alloc_rows(struct kmscon_vte *vte, unsigned int rows)
+{
+	uint64_t *seq;
+	uint8_t *blink;
+
+	if (vte->row_count == rows)
 		return 0;
 
-	cells = realloc(vte->cells, count * sizeof(*cells));
-	if (!cells)
+	seq = realloc(vte->row_seq, rows * sizeof(*seq));
+	if (!seq)
 		return -ENOMEM;
+	vte->row_seq = seq;
 
-	vte->cells = cells;
-	vte->cells_count = count;
+	blink = realloc(vte->row_blink, rows * sizeof(*blink));
+	if (!blink) {
+		/* row_seq may already have shrunk, so make sure nothing indexes
+		 * either array until a later try succeeds */
+		vte->row_count = 0;
+		return -ENOMEM;
+	}
+	vte->row_blink = blink;
+
+	memset(vte->row_blink, 0, rows * sizeof(*blink));
+	vte->row_count = rows;
+	mark_dirty_all(vte);
 	return 0;
 }
 
@@ -1010,33 +1078,22 @@ static void apply_min_contrast(struct kmscon_vte *vte, struct kmscon_cell *cell)
 		cell->fg = (struct kmscon_color){0, 0, 0};
 }
 
-static enum kmscon_cursor_shape to_cursor_shape(GhosttyRenderStateCursorVisualStyle style)
+static void blank_cell(struct kmscon_vte *vte, struct kmscon_cell *out)
 {
-	switch (style) {
-	case GHOSTTY_RENDER_STATE_CURSOR_VISUAL_STYLE_BAR:
-		return KMSCON_CURSOR_BAR;
-	case GHOSTTY_RENDER_STATE_CURSOR_VISUAL_STYLE_UNDERLINE:
-		return KMSCON_CURSOR_UNDERLINE;
-	case GHOSTTY_RENDER_STATE_CURSOR_VISUAL_STYLE_BLOCK_HOLLOW:
-		return KMSCON_CURSOR_BLOCK_HOLLOW;
-	default:
-		return KMSCON_CURSOR_BLOCK;
-	}
+	memset(out, 0, sizeof(*out));
+	out->fg = to_color(vte->colors.foreground);
+	out->bg = to_color(vte->colors.background);
 }
 
-static void draw_cell(struct kmscon_vte *vte, GhosttyRenderStateRowCells cells,
-		      const GhosttyRenderStateColors *colors, bool selected,
-		      struct kmscon_cell *out)
+static void draw_cell(struct kmscon_vte *vte, bool selected, struct kmscon_cell *out)
 {
+	GhosttyRenderStateRowCells cells = vte->row_cells;
 	GhosttyStyle style = GHOSTTY_INIT_SIZED(GhosttyStyle);
 	GhosttyColorRgb rgb;
 	uint32_t graphemes_len = 0;
 	bool has_styling = false;
-	bool inverse;
 
-	memset(out, 0, sizeof(*out));
-	out->fg = to_color(colors->foreground);
-	out->bg = to_color(colors->background);
+	blank_cell(vte, out);
 
 	ghostty_render_state_row_cells_get(cells, GHOSTTY_RENDER_STATE_ROW_CELLS_DATA_GRAPHEMES_LEN,
 					   &graphemes_len);
@@ -1046,26 +1103,30 @@ static void draw_cell(struct kmscon_vte *vte, GhosttyRenderStateRowCells cells,
 		out->ch = vte->graphemes[0];
 	}
 
+	/* A cell can only carry a style or a color of its own if it is styled,
+	 * so this one query saves three for every plain cell on the screen. */
 	ghostty_render_state_row_cells_get(cells, GHOSTTY_RENDER_STATE_ROW_CELLS_DATA_HAS_STYLING,
 					   &has_styling);
-	if (has_styling)
+	if (has_styling) {
 		ghostty_render_state_row_cells_get(cells, GHOSTTY_RENDER_STATE_ROW_CELLS_DATA_STYLE,
 						   &style);
 
-	if (ghostty_render_state_row_cells_get(cells, GHOSTTY_RENDER_STATE_ROW_CELLS_DATA_FG_COLOR,
-					       &rgb) == GHOSTTY_SUCCESS)
-		out->fg = to_color(rgb);
-	if (ghostty_render_state_row_cells_get(cells, GHOSTTY_RENDER_STATE_ROW_CELLS_DATA_BG_COLOR,
-					       &rgb) == GHOSTTY_SUCCESS)
-		out->bg = to_color(rgb);
+		if (ghostty_render_state_row_cells_get(cells,
+						       GHOSTTY_RENDER_STATE_ROW_CELLS_DATA_FG_COLOR,
+						       &rgb) == GHOSTTY_SUCCESS)
+			out->fg = to_color(rgb);
+		if (ghostty_render_state_row_cells_get(cells,
+						       GHOSTTY_RENDER_STATE_ROW_CELLS_DATA_BG_COLOR,
+						       &rgb) == GHOSTTY_SUCCESS)
+			out->bg = to_color(rgb);
+	}
 
 	out->attr.bold = style.bold;
 	out->attr.italic = style.italic;
 	out->attr.underline = !!style.underline;
 	out->attr.blink = style.blink;
 
-	inverse = style.inverse ^ selected;
-	if (inverse) {
+	if (style.inverse ^ selected) {
 		struct kmscon_color tmp = out->fg;
 
 		out->fg = out->bg;
@@ -1078,60 +1139,179 @@ static void draw_cell(struct kmscon_vte *vte, GhosttyRenderStateRowCells cells,
 		apply_min_contrast(vte, out);
 	if (style.invisible)
 		out->fg = out->bg;
+	/* a blinking cell is simply blank for half of its period */
+	if (out->attr.blink && vte->blink)
+		out->ch = ' ';
+}
+
+/* The renderers draw a single glyph per cell, so the cursor is folded into the
+ * cell it sits on instead of being drawn on top of it. */
+static void apply_cursor(struct kmscon_vte *vte, struct kmscon_cell *cell)
+{
+	struct kmscon_color under;
+
+	switch (vte->cursor.style) {
+	case GHOSTTY_RENDER_STATE_CURSOR_VISUAL_STYLE_UNDERLINE:
+		cell->attr.underline = !cell->attr.underline;
+		if (vte->cursor.has_color)
+			cell->fg = vte->cursor.color;
+		break;
+	case GHOSTTY_RENDER_STATE_CURSOR_VISUAL_STYLE_BAR:
+		/* The bar is drawn into the glyph, so the character below the
+		 * cursor stays readable. It shares the color of the cell,
+		 * there is only one per cell. */
+		cell->attr.cursor_bar = 1;
+		if (vte->cursor.has_color)
+			cell->fg = vte->cursor.color;
+		break;
+	default:
+		/* A block fills the cell, so the glyph has to be drawn in the
+		 * color behind it to stay readable. */
+		under = cell->bg;
+		cell->bg = vte->cursor.has_color ? vte->cursor.color : cell->fg;
+		cell->fg = under;
+		break;
+	}
 }
 
 #define SCROLLBAR_THUMB 0x2588	/* FULL BLOCK */
 #define SCROLLBAR_TROUGH 0x2502 /* BOX DRAWINGS LIGHT VERTICAL */
 
-/* Replace the last column with a scroll position indicator. This is only done
- * while the user is looking at the scrollback, so a terminal that is scrolled
- * to the bottom keeps all of its columns. */
-static void draw_scrollbar(struct kmscon_vte *vte, const GhosttyRenderStateColors *colors,
-			   unsigned int cols, unsigned int rows)
+static void draw_scrollbar(struct kmscon_vte *vte, unsigned int y, struct kmscon_cell *cell)
+{
+	bool thumb = y >= vte->sb.start && y < vte->sb.start + vte->sb.len;
+
+	blank_cell(vte, cell);
+	cell->ch = thumb ? SCROLLBAR_THUMB : SCROLLBAR_TROUGH;
+}
+
+/* The scroll indicator replaces the last column, so it has to be recomputed
+ * before the rows are handed out and every move repaints the whole screen. */
+static void update_scrollbar(struct kmscon_vte *vte, unsigned int cols, unsigned int rows)
 {
 	struct kmscon_vte_scrollbar sb;
-	uint64_t start, len;
-	unsigned int y;
-	bool active = true;
+	struct scrollbar_state state;
+	bool at_bottom = true;
 
-	if (cols < 2 || !rows)
-		return;
+	memset(&state, 0, sizeof(state));
 
-	ghostty_terminal_get(vte->term, GHOSTTY_TERMINAL_DATA_VIEWPORT_ACTIVE, &active);
-	if (active)
-		return;
+	if (vte->scrollbar && cols >= 2 && rows) {
+		ghostty_terminal_get(vte->term, GHOSTTY_TERMINAL_DATA_VIEWPORT_ACTIVE, &at_bottom);
+		kmscon_vte_get_scrollbar(vte, &sb);
 
-	kmscon_vte_get_scrollbar(vte, &sb);
-	if (!sb.total || sb.len >= sb.total)
-		return;
+		/* It only shows while the user is looking at the scrollback, a
+		 * terminal at the bottom keeps all of its columns. */
+		if (!at_bottom && sb.total && sb.len < sb.total) {
+			state.len = (sb.len * rows + sb.total - 1) / sb.total;
+			if (!state.len)
+				state.len = 1;
+			state.start = sb.offset * rows / sb.total;
+			if (state.start + state.len > rows)
+				state.start = rows - state.len;
+			state.on = true;
+		}
+	}
 
-	len = (sb.len * rows + sb.total - 1) / sb.total;
-	if (!len)
-		len = 1;
-	start = sb.offset * rows / sb.total;
-	if (start + len > rows)
-		start = rows - len;
-
-	for (y = 0; y < rows; ++y) {
-		struct kmscon_cell *cell = &vte->cells[y * cols + cols - 1];
-
-		memset(cell, 0, sizeof(*cell));
-		cell->fg = to_color(colors->foreground);
-		cell->bg = to_color(colors->background);
-		cell->ch = (y >= start && y < start + len) ? SCROLLBAR_THUMB : SCROLLBAR_TROUGH;
+	if (memcmp(&state, &vte->sb, sizeof(state))) {
+		vte->sb = state;
+		mark_dirty_all(vte);
 	}
 }
 
-int kmscon_vte_draw(struct kmscon_vte *vte, struct kmscon_vte_screen *out)
+static void update_cursor(struct kmscon_vte *vte)
 {
-	GhosttyRenderStateColors colors = GHOSTTY_INIT_SIZED(GhosttyRenderStateColors);
-	GhosttyRenderStateCursorVisualStyle cursor_style;
-	uint16_t cols = 0, rows = 0, cursor_x = 0, cursor_y = 0;
-	bool cursor_visible = false, cursor_in_viewport = false, cursor_blinking = false;
-	unsigned int x, y;
+	struct cursor_state cursor;
+	uint16_t x = 0, y = 0;
+	bool visible = false, in_viewport = false, blinking = false;
+
+	memset(&cursor, 0, sizeof(cursor));
+
+	ghostty_render_state_get(vte->render, GHOSTTY_RENDER_STATE_DATA_CURSOR_VISIBLE, &visible);
+	ghostty_render_state_get(vte->render, GHOSTTY_RENDER_STATE_DATA_CURSOR_VIEWPORT_HAS_VALUE,
+				 &in_viewport);
+	ghostty_render_state_get(vte->render, GHOSTTY_RENDER_STATE_DATA_CURSOR_BLINKING, &blinking);
+	if (in_viewport) {
+		ghostty_render_state_get(vte->render, GHOSTTY_RENDER_STATE_DATA_CURSOR_VIEWPORT_X,
+					 &x);
+		ghostty_render_state_get(vte->render, GHOSTTY_RENDER_STATE_DATA_CURSOR_VIEWPORT_Y,
+					 &y);
+	}
+	if (ghostty_render_state_get(vte->render, GHOSTTY_RENDER_STATE_DATA_CURSOR_VISUAL_STYLE,
+				     &cursor.style) != GHOSTTY_SUCCESS)
+		cursor.style = GHOSTTY_RENDER_STATE_CURSOR_VISUAL_STYLE_BLOCK;
+
+	cursor.x = x;
+	cursor.y = y;
+	/* a blinking cursor is simply absent for half of its period */
+	cursor.visible = visible && in_viewport && !(blinking && vte->cursor_phase);
+	cursor.has_color = vte->colors.cursor_has_value;
+	if (cursor.has_color)
+		cursor.color = to_color(vte->colors.cursor);
+
+	if (!memcmp(&cursor, &vte->cursor, sizeof(cursor)))
+		return;
+
+	/* the row the cursor left and the one it entered both have to change */
+	if (vte->cursor.visible)
+		mark_dirty_row(vte, vte->cursor.y);
+	if (cursor.visible)
+		mark_dirty_row(vte, cursor.y);
+
+	vte->cursor = cursor;
+}
+
+/* Take over the dirty state that the update call left in the render state.
+ * libghostty-vt only ever sets those flags, clearing them is our job. */
+static void consume_dirty(struct kmscon_vte *vte, bool full)
+{
+	GhosttyRenderStateDirty clean_frame = GHOSTTY_RENDER_STATE_DIRTY_FALSE;
+	bool clean_row = false;
+	uint64_t seq = ++vte->seq;
+	unsigned int y;
+
+	if (ghostty_render_state_get(vte->render, GHOSTTY_RENDER_STATE_DATA_ROW_ITERATOR,
+				     &vte->rows) != GHOSTTY_SUCCESS) {
+		for (y = 0; y < vte->row_count; ++y)
+			vte->row_seq[y] = seq;
+		return;
+	}
+
+	/*
+	 * Every row is visited even when the whole frame is dirty. The two
+	 * layers of dirty state are independent, so clearing the frame does
+	 * not clear the rows, and a flag left behind here would make the next
+	 * partial frame look like everything had changed.
+	 */
+	for (y = 0; y < vte->row_count; ++y) {
+		bool dirty = false;
+
+		if (!ghostty_render_state_row_iterator_next(vte->rows))
+			break;
+
+		ghostty_render_state_row_get(vte->rows, GHOSTTY_RENDER_STATE_ROW_DATA_DIRTY,
+					     &dirty);
+		if (!dirty) {
+			if (full)
+				vte->row_seq[y] = seq;
+			continue;
+		}
+
+		vte->row_seq[y] = seq;
+		ghostty_render_state_row_set(vte->rows, GHOSTTY_RENDER_STATE_ROW_OPTION_DIRTY,
+					     &clean_row);
+	}
+
+	ghostty_render_state_set(vte->render, GHOSTTY_RENDER_STATE_OPTION_DIRTY, &clean_frame);
+}
+
+int kmscon_vte_frame_begin(struct kmscon_vte *vte, const struct kmscon_vte_watch *watch,
+			   struct kmscon_vte_frame *out)
+{
+	GhosttyRenderStateDirty dirty = GHOSTTY_RENDER_STATE_DIRTY_FULL;
+	uint16_t cols = 0, rows = 0;
 	int ret;
 
-	if (!vte || !out)
+	if (!vte || !watch || !out)
 		return -EINVAL;
 
 	if (ghostty_render_state_update(vte->render, vte->term) != GHOSTTY_SUCCESS)
@@ -1139,79 +1319,136 @@ int kmscon_vte_draw(struct kmscon_vte *vte, struct kmscon_vte_screen *out)
 
 	ghostty_render_state_get(vte->render, GHOSTTY_RENDER_STATE_DATA_COLS, &cols);
 	ghostty_render_state_get(vte->render, GHOSTTY_RENDER_STATE_DATA_ROWS, &rows);
-	ghostty_render_state_colors_get(vte->render, &colors);
 
-	ret = alloc_cells(vte, (size_t)cols * rows);
+	vte->colors.size = sizeof(vte->colors);
+	ghostty_render_state_colors_get(vte->render, &vte->colors);
+
+	ret = alloc_rows(vte, rows);
 	if (ret)
 		return ret;
-	memset(vte->cells, 0, (size_t)cols * rows * sizeof(*vte->cells));
 
+	ghostty_render_state_get(vte->render, GHOSTTY_RENDER_STATE_DATA_DIRTY, &dirty);
+	if (dirty != GHOSTTY_RENDER_STATE_DIRTY_FALSE)
+		consume_dirty(vte, dirty == GHOSTTY_RENDER_STATE_DIRTY_FULL);
+
+	update_scrollbar(vte, cols, rows);
+	update_cursor(vte);
+
+	/* a fresh iterator for the caller to walk */
 	if (ghostty_render_state_get(vte->render, GHOSTTY_RENDER_STATE_DATA_ROW_ITERATOR,
 				     &vte->rows) != GHOSTTY_SUCCESS)
 		return -EFAULT;
 
-	for (y = 0; y < rows && ghostty_render_state_row_iterator_next(vte->rows); ++y) {
-		GhosttyRenderStateRowSelection sel =
-			GHOSTTY_INIT_SIZED(GhosttyRenderStateRowSelection);
-		bool has_sel;
+	vte->frame_cols = cols;
+	vte->frame_rows = rows;
+	vte->frame_y = 0;
+	vte->frame_seen = watch->seq;
 
-		has_sel = ghostty_render_state_row_get(vte->rows,
-						       GHOSTTY_RENDER_STATE_ROW_DATA_SELECTION,
-						       &sel) == GHOSTTY_SUCCESS;
-
-		if (ghostty_render_state_row_get(vte->rows, GHOSTTY_RENDER_STATE_ROW_DATA_CELLS,
-						 &vte->row_cells) != GHOSTTY_SUCCESS)
-			continue;
-
-		for (x = 0; x < cols && ghostty_render_state_row_cells_next(vte->row_cells); ++x) {
-			bool selected = has_sel && x >= sel.start_x && x <= sel.end_x;
-
-			draw_cell(vte, vte->row_cells, &colors, selected,
-				  &vte->cells[y * cols + x]);
-		}
-	}
-
-	if (vte->scrollbar)
-		draw_scrollbar(vte, &colors, cols, rows);
-
-	ghostty_render_state_get(vte->render, GHOSTTY_RENDER_STATE_DATA_CURSOR_VISIBLE,
-				 &cursor_visible);
-	ghostty_render_state_get(vte->render, GHOSTTY_RENDER_STATE_DATA_CURSOR_VIEWPORT_HAS_VALUE,
-				 &cursor_in_viewport);
-	ghostty_render_state_get(vte->render, GHOSTTY_RENDER_STATE_DATA_CURSOR_BLINKING,
-				 &cursor_blinking);
-	if (cursor_in_viewport) {
-		ghostty_render_state_get(vte->render, GHOSTTY_RENDER_STATE_DATA_CURSOR_VIEWPORT_X,
-					 &cursor_x);
-		ghostty_render_state_get(vte->render, GHOSTTY_RENDER_STATE_DATA_CURSOR_VIEWPORT_Y,
-					 &cursor_y);
-	}
-	if (ghostty_render_state_get(vte->render, GHOSTTY_RENDER_STATE_DATA_CURSOR_VISUAL_STYLE,
-				     &cursor_style) != GHOSTTY_SUCCESS)
-		cursor_style = GHOSTTY_RENDER_STATE_CURSOR_VISUAL_STYLE_BLOCK;
-
-	out->cells = vte->cells;
 	out->cols = cols;
 	out->rows = rows;
-	out->cursor_x = cursor_x;
-	out->cursor_y = cursor_y;
-	out->cursor_visible = cursor_visible && cursor_in_viewport;
-	out->cursor_blinks = cursor_blinking;
-	out->cursor_shape = to_cursor_shape(cursor_style);
+	out->attr.fg = to_color(vte->colors.foreground);
+	out->attr.bg = to_color(vte->colors.background);
 
-	out->cursor_has_color = false;
-	ghostty_render_state_get(vte->render, GHOSTTY_RENDER_STATE_DATA_COLOR_CURSOR_HAS_VALUE,
-				 &out->cursor_has_color);
-	if (out->cursor_has_color) {
-		GhosttyColorRgb rgb;
+	return vte->seq > watch->seq;
+}
 
-		if (ghostty_render_state_get(vte->render, GHOSTTY_RENDER_STATE_DATA_COLOR_CURSOR,
-					     &rgb) == GHOSTTY_SUCCESS)
-			out->cursor_color = to_color(rgb);
-		else
-			out->cursor_has_color = false;
+/* The text renderers live in loadable modules, so the two calls they make to
+ * pull a frame have to stay visible outside the executable. */
+SHL_EXPORT
+bool kmscon_vte_frame_row(struct kmscon_vte *vte, unsigned int *y, bool *dirty)
+{
+	if (!vte || !y || vte->frame_y >= vte->frame_rows)
+		return false;
+
+	if (!ghostty_render_state_row_iterator_next(vte->rows))
+		return false;
+
+	*y = vte->frame_y++;
+	if (dirty)
+		*dirty = vte->row_seq[*y] > vte->frame_seen;
+	return true;
+}
+
+SHL_EXPORT
+void kmscon_vte_frame_cells(struct kmscon_vte *vte, struct kmscon_cell *cells, unsigned int len)
+{
+	GhosttyRenderStateRowSelection sel = GHOSTTY_INIT_SIZED(GhosttyRenderStateRowSelection);
+	unsigned int x, y, count;
+	bool has_sel, blink = false;
+
+	if (!vte || !cells || !vte->frame_y || !len)
+		return;
+
+	y = vte->frame_y - 1;
+	count = len < vte->frame_cols ? len : vte->frame_cols;
+	has_sel = ghostty_render_state_row_get(vte->rows, GHOSTTY_RENDER_STATE_ROW_DATA_SELECTION,
+					       &sel) == GHOSTTY_SUCCESS;
+
+	if (ghostty_render_state_row_get(vte->rows, GHOSTTY_RENDER_STATE_ROW_DATA_CELLS,
+					 &vte->row_cells) != GHOSTTY_SUCCESS) {
+		for (x = 0; x < count; ++x)
+			blank_cell(vte, &cells[x]);
+		return;
 	}
-	return 0;
+
+	for (x = 0; x < count; ++x) {
+		if (!ghostty_render_state_row_cells_next(vte->row_cells)) {
+			blank_cell(vte, &cells[x]);
+			continue;
+		}
+		draw_cell(vte, has_sel && x >= sel.start_x && x <= sel.end_x, &cells[x]);
+		blink |= cells[x].attr.blink;
+	}
+
+	/* so that the blink timer knows which rows it has to repaint */
+	vte->row_blink[y] = blink;
+
+	if (vte->sb.on)
+		draw_scrollbar(vte, y, &cells[count - 1]);
+
+	if (vte->cursor.visible && vte->cursor.y == y && vte->cursor.x < count)
+		apply_cursor(vte, &cells[vte->cursor.x]);
+}
+
+void kmscon_vte_frame_end(struct kmscon_vte *vte, struct kmscon_vte_watch *watch)
+{
+	if (vte && watch)
+		watch->seq = vte->seq;
+}
+
+void kmscon_vte_blink_tick(struct kmscon_vte *vte)
+{
+	unsigned int y;
+
+	if (!vte)
+		return;
+
+	vte->blink = !vte->blink;
+
+	/* only the rows that actually hold blinking cells change */
+	for (y = 0; y < vte->row_count; ++y)
+		if (vte->row_blink[y])
+			mark_dirty_row(vte, y);
+}
+
+static void set_cursor_phase(struct kmscon_vte *vte, bool on)
+{
+	if (!vte || vte->cursor_phase == on)
+		return;
+
+	vte->cursor_phase = on;
+	mark_dirty_row(vte, vte->cursor.y);
+}
+
+void kmscon_vte_cursor_blink_tick(struct kmscon_vte *vte)
+{
+	if (vte)
+		set_cursor_phase(vte, !vte->cursor_phase);
+}
+
+void kmscon_vte_cursor_blink_reset(struct kmscon_vte *vte)
+{
+	set_cursor_phase(vte, false);
 }
 
 void kmscon_vte_get_scrollbar(struct kmscon_vte *vte, struct kmscon_vte_scrollbar *out)
@@ -1240,6 +1477,7 @@ static void scroll_delta(struct kmscon_vte *vte, intptr_t delta)
 		return;
 
 	ghostty_terminal_scroll_viewport(vte->term, behavior);
+	mark_dirty_all(vte);
 }
 
 void kmscon_vte_sb_up(struct kmscon_vte *vte, unsigned int num)
@@ -1315,6 +1553,7 @@ int kmscon_vte_jump_to_prompt(struct kmscon_vte *vte, int delta)
 							    .tag = GHOSTTY_SCROLL_VIEWPORT_ROW,
 							    .value = {.row = (size_t)row},
 						    });
+	mark_dirty_all(vte);
 	return 0;
 }
 
@@ -1326,6 +1565,7 @@ void kmscon_vte_sb_reset(struct kmscon_vte *vte)
 		return;
 
 	ghostty_terminal_scroll_viewport(vte->term, behavior);
+	mark_dirty_all(vte);
 }
 
 /* selection */
@@ -1345,6 +1585,10 @@ static bool viewport_ref(struct kmscon_vte *vte, unsigned int x, unsigned int y,
 static void set_selection(struct kmscon_vte *vte, const GhosttySelection *sel)
 {
 	ghostty_terminal_set(vte->term, GHOSTTY_TERMINAL_OPT_SELECTION, sel);
+
+	/* the selection inverts the cells it covers, and the terminal itself
+	 * did not change, so the rows have to be repainted from here */
+	mark_dirty_all(vte);
 }
 
 void kmscon_vte_selection_reset(struct kmscon_vte *vte)

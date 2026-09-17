@@ -115,6 +115,13 @@ struct gltex {
 	GLfloat cos;
 	GLfloat sin;
 
+	/* frames that have to be drawn no matter what the terminal does,
+	 * because the buffers they go into hold nothing yet */
+	uint8_t redraw;
+
+	/* one row pulled from the vte, reused for every row */
+	struct kmscon_cell *row;
+
 	struct kmscon_screen_attr attr;
 };
 
@@ -241,6 +248,15 @@ static int gltex_set(struct kmscon_text *txt)
 		s = 2048;
 	gt->max_tex_size = s;
 
+	gt->row = malloc(sizeof(*gt->row) * txt->max_cols);
+	if (!gt->row) {
+		ret = -ENOMEM;
+		goto err_shader;
+	}
+
+	/* nothing has been drawn into either buffer of the pair yet */
+	gt->redraw = 2;
+
 	gl_clear_error();
 	return 0;
 
@@ -266,6 +282,8 @@ static void gltex_unset(struct kmscon_text *txt)
 	}
 
 	shl_hashtable_free(gt->glyphs);
+	free(gt->row);
+	gt->row = NULL;
 
 	while (!shl_dlist_empty(&gt->atlases)) {
 		iter = gt->atlases.next;
@@ -408,9 +426,6 @@ static struct gl_glyph *find_glyph(struct kmscon_text *txt, const struct kmscon_
 	font->attr.italic = !!cell->attr.italic;
 	font->attr.bold = !!cell->attr.bold;
 
-	if (cell->attr.blink && txt->blinking)
-		ch = ' ';
-
 	if (!kmscon_font_has_glyph(font, ch))
 		ch = FONT_REPLACEMENT_CHAR;
 
@@ -479,9 +494,12 @@ err_free:
 
 static void gltex_resize(struct kmscon_text *txt, unsigned int cols, unsigned int rows)
 {
+	struct gltex *gt = txt->data;
+
 	txt->cols = cols;
 	txt->rows = rows;
 	compute_advance_and_offset(txt);
+	gt->redraw = 2;
 }
 
 static int gltex_rotate(struct kmscon_text *txt, enum Orientation orientation)
@@ -493,9 +511,10 @@ static int gltex_rotate(struct kmscon_text *txt, enum Orientation orientation)
 	return 0;
 }
 
-static int gltex_prepare(struct kmscon_text *txt, struct kmscon_screen_attr *attr)
+static int gltex_prepare(struct kmscon_text *txt)
 {
 	struct gltex *gt = txt->data;
+	struct kmscon_screen_attr *attr = &txt->frame.attr;
 	struct atlas *atlas;
 	struct shl_dlist *iter;
 	int ret;
@@ -503,6 +522,15 @@ static int gltex_prepare(struct kmscon_text *txt, struct kmscon_screen_attr *att
 	ret = display_use(txt->disp);
 	if (ret)
 		return ret;
+
+	/*
+	 * A buffer that came back from a mode switch holds nothing, and the
+	 * terminal has no reason to change just because the display did, so
+	 * this backend has to ask for the frames itself. Both buffers of the
+	 * pair need one.
+	 */
+	if (memcmp(&gt->attr, attr, sizeof(*attr)) || display_need_redraw(txt->disp))
+		gt->redraw = 2;
 
 	shl_dlist_for_each(iter, &gt->atlases)
 	{
@@ -514,7 +542,12 @@ static int gltex_prepare(struct kmscon_text *txt, struct kmscon_screen_attr *att
 
 	glClearColor(gt->attr.bg.r / 255.0, gt->attr.bg.g / 255.0, gt->attr.bg.b / 255.0, 1);
 	glClear(GL_COLOR_BUFFER_BIT);
-	return 0;
+
+	if (!gt->redraw)
+		return 0;
+
+	gt->redraw--;
+	return 1;
 }
 
 static int gltex_draw_cell(struct kmscon_text *txt, const struct kmscon_cell *cell,
@@ -592,26 +625,26 @@ static int gltex_draw_cell(struct kmscon_text *txt, const struct kmscon_cell *ce
 	return 0;
 }
 
-static int gltex_draw(struct kmscon_text *txt, const struct kmscon_cell *cells,
-		      struct kmscon_cursor *cursor)
+static int gltex_draw(struct kmscon_text *txt)
 {
-	unsigned int posx, posy, off;
+	struct gltex *gt = txt->data;
+	unsigned int posx, y;
 
-	for (posy = 0; posy < txt->rows; posy++) {
-		for (posx = 0; posx < txt->cols; posx++) {
-			off = posx + posy * txt->cols;
+	/*
+	 * The vertex cache is rebuilt from scratch every frame, so unlike
+	 * bbulk there is nothing to keep and every row is pulled. What the
+	 * dirty tracking buys this backend is the frame it does not draw at
+	 * all, which kmscon_text_prepare() decided before we got here.
+	 */
+	while (kmscon_vte_frame_row(txt->vte, &y, NULL)) {
+		if (y >= txt->rows)
+			break;
 
-			if (cursor->visible && cursor->x == posx && cursor->y == posy)
-				gltex_draw_cell(txt, &cursor->cell, posx, posy);
-			else if (cells[off].attr.blink && txt->blinking) {
-				struct kmscon_cell cell = cells[off];
-
-				cell.ch = ' ';
-				gltex_draw_cell(txt, &cell, posx, posy);
-			} else
-				gltex_draw_cell(txt, &cells[off], posx, posy);
-		}
+		kmscon_vte_frame_cells(txt->vte, gt->row, txt->max_cols);
+		for (posx = 0; posx < txt->cols; posx++)
+			gltex_draw_cell(txt, &gt->row[posx], posx, y);
 	}
+
 	return 0;
 }
 
@@ -699,6 +732,13 @@ static int gltex_draw_pointer(struct kmscon_text *txt, unsigned int x, unsigned 
 	return 0;
 }
 
+static void gltex_invalidate(struct kmscon_text *txt)
+{
+	struct gltex *gt = txt->data;
+
+	gt->redraw = 2;
+}
+
 static int gltex_render(struct kmscon_text *txt)
 {
 	struct gltex *gt = txt->data;
@@ -769,5 +809,5 @@ struct kmscon_text_ops kmscon_text_gltex_ops = {
 	.draw = gltex_draw,
 	.draw_pointer = gltex_draw_pointer,
 	.render = gltex_render,
-	.abort = NULL,
+	.invalidate = gltex_invalidate,
 };

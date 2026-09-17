@@ -57,6 +57,17 @@ test_bbulk = executable(
 )
 test('test_bbulk', test_bbulk)
 
+test_render = executable(
+    'test_render',
+    'test_render.c',
+    '../src/vte.c',
+    '../src/render/text.c',
+    '../src/render/bbulk.c',
+    include_directories: src_inc,
+    dependencies: [libghostty_vt_deps, shl_deps, xkbcommon_deps, htable_deps],
+)
+test('test_render', test_render)
+
 test_asciinema = executable(
     'test_asciinema',
     'test_asciinema.c',

@@ -120,8 +120,47 @@ void display_set_cursor_offset(struct display *disp, int32_t x, int32_t y)
 #define log_warning(f, ...)
 #undef log_debug
 #define log_debug(f, ...)
+/* ---- The frame that the vte would hand out ---- */
+static unsigned int fake_rows;
+static unsigned int fake_cols;
+static unsigned int fake_next;
+static bool fake_dirty[64];
+static unsigned int rows_pulled;
+
+bool kmscon_vte_frame_row(struct kmscon_vte *vte, unsigned int *y, bool *dirty)
+{
+	(void)vte;
+	if (fake_next >= fake_rows)
+		return false;
+
+	*y = fake_next++;
+	if (dirty)
+		*dirty = fake_dirty[*y];
+	return true;
+}
+
+void kmscon_vte_frame_cells(struct kmscon_vte *vte, struct kmscon_cell *cells, unsigned int len)
+{
+	(void)vte;
+	(void)len;
+	memset(cells, 0, fake_cols * sizeof(*cells));
+	rows_pulled++;
+}
+
 /* Pull in the implementation so we can call bbulk_set directly */
 #include "../src/render/bbulk.c"
+
+/* Run one frame in which the terminal itself did not change at all */
+static unsigned int draw_clean_frame(struct kmscon_text *txt)
+{
+	fake_cols = txt->cols;
+	fake_rows = txt->rows;
+	fake_next = 0;
+	memset(fake_dirty, 0, sizeof(fake_dirty));
+	rows_pulled = 0;
+	bbulk_draw(txt);
+	return rows_pulled;
+}
 
 /* Fake font objects with valid width/height for FONT_WIDTH/FONT_HEIGHT macros */
 static struct kmscon_font fake_font = {.attr = {.width = FAKE_CELL_W, .height = FAKE_CELL_H}};
@@ -169,11 +208,35 @@ int main(void)
 	/* Exercise prepare/render + damage path */
 	struct kmscon_screen_attr attr;
 	memset(&attr, 0, sizeof(attr));
-	ret = bbulk_prepare(&txt, &attr);
-	assert(ret == 0);
+	/* every row owes a blit right after a set, so prepare asks for a draw
+	 * even though the terminal has not moved */
+	txt.frame.attr = attr;
+	ret = bbulk_prepare(&txt);
+	assert(ret == 1);
 	ret = bbulk_render(&txt);
 	assert(ret == 0);
 	assert(bb->damage_rect_len > 0);
+
+	/*
+	 * A row the terminal did not touch is pulled only while it still owes
+	 * the off-screen buffer a blit: once to push the new content, once for
+	 * the other buffer of the pair, and from then on not at all.
+	 */
+	assert(draw_clean_frame(&txt) == txt.rows);
+	assert(draw_clean_frame(&txt) == txt.rows);
+	assert(draw_clean_frame(&txt) == txt.rows);
+	assert(draw_clean_frame(&txt) == 0);
+	assert(bbulk_prepare(&txt) == 0);
+
+	/* a row the terminal did change is pulled again */
+	fake_cols = txt.cols;
+	fake_rows = txt.rows;
+	fake_next = 0;
+	memset(fake_dirty, 0, sizeof(fake_dirty));
+	fake_dirty[2] = true;
+	rows_pulled = 0;
+	bbulk_draw(&txt);
+	assert(rows_pulled == 1);
 
 	bbulk_unset(&txt);
 	assert(bb->cells == NULL);
