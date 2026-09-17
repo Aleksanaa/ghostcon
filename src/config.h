@@ -153,6 +153,10 @@ struct kmscon_conf_t {
 	struct conf_grab *grab_page_up;
 	/* page-down grab */
 	struct conf_grab *grab_page_down;
+	/* jump to the previous shell prompt */
+	struct conf_grab *grab_prompt_up;
+	/* jump to the next shell prompt */
+	struct conf_grab *grab_prompt_down;
 	/* zoom-in grab */
 	struct conf_grab *grab_zoom_in;
 	/* zoom-out grab */

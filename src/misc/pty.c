@@ -239,6 +239,10 @@ static void __attribute__((noreturn)) exec_child(const char *term, const char *c
 	if (vtnr)
 		setenv("XDG_VTNR", vtnr, 1);
 
+	/* Tells the shell integration scripts that the terminal understands
+	 * the OSC 133 sequences they emit */
+	setenv("KMSCON_SHELL_INTEGRATION", "1", 1);
+
 	if (drm) {
 		setenv("KMS_START_SCRIPT", "kmscon-launch-gui", 1);
 		setenv("TERM_SESSION_TYPE", "kms", 1);

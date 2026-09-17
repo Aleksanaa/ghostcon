@@ -434,6 +434,25 @@ font-name=Ubuntu Mono
       </varlistentry>
 
       <varlistentry>
+        <term><option>grab-prompt-up</option></term>
+        <listitem>
+          <para>Scroll to the previous shell prompt. Needs a shell that reports
+                its prompts, see
+                <citerefentry><refentrytitle>kmscon</refentrytitle>
+                <manvolnum>1</manvolnum></citerefentry>.
+                (default: &lt;Ctrl&gt;&lt;Shift&gt;Up)</para>
+        </listitem>
+      </varlistentry>
+
+      <varlistentry>
+        <term><option>grab-prompt-down</option></term>
+        <listitem>
+          <para>Scroll to the next shell prompt.
+                (default: &lt;Ctrl&gt;&lt;Shift&gt;Down)</para>
+        </listitem>
+      </varlistentry>
+
+      <varlistentry>
         <term><option>grab-zoom-in</option></term>
         <listitem>
           <para>Shortcut to increase font size. (default: &lt;Ctrl&gt;Plus)</para>

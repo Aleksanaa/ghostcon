@@ -866,6 +866,18 @@ static void input_event(struct input *input, struct input_key_event *ev, void *d
 		ev->handled = true;
 		return;
 	}
+	if (conf_grab_matches(term->conf->grab_prompt_up, ev->mods, ev->num_syms, ev->keysyms)) {
+		if (!kmscon_vte_jump_to_prompt(term->vte, -1))
+			redraw_all(term);
+		ev->handled = true;
+		return;
+	}
+	if (conf_grab_matches(term->conf->grab_prompt_down, ev->mods, ev->num_syms, ev->keysyms)) {
+		if (!kmscon_vte_jump_to_prompt(term->vte, 1))
+			redraw_all(term);
+		ev->handled = true;
+		return;
+	}
 	if (conf_grab_matches(term->conf->grab_zoom_in, ev->mods, ev->num_syms, ev->keysyms)) {
 		ev->handled = true;
 		zoom_in(term);
@@ -978,8 +990,15 @@ static void handle_pointer_button(struct kmscon_terminal *term, struct input_poi
 	case 0:
 		if (ev->pressed) {
 			if (ev->double_click) {
-				kmscon_vte_selection_word(term->vte, term->pointer.posx,
-							  term->pointer.posy);
+				/* A double-click selects a word, holding
+				 * control selects the whole output of the
+				 * command instead. */
+				if (input_get_mods(term->input) & INPUT_CONTROL_MASK)
+					kmscon_vte_selection_output(term->vte, term->pointer.posx,
+								    term->pointer.posy);
+				else
+					kmscon_vte_selection_word(term->vte, term->pointer.posx,
+								  term->pointer.posy);
 				copy_selection(term);
 				term->pointer.select = false;
 			} else {

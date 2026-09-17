@@ -1264,6 +1264,60 @@ void kmscon_vte_sb_page_down(struct kmscon_vte *vte, unsigned int num)
 		scroll_delta(vte, (intptr_t)(num * vte->rows_num));
 }
 
+/* Rows are marked as prompts by the OSC 133 sequences that a shell with
+ * kmscon's shell integration emits. */
+static bool row_is_prompt(struct kmscon_vte *vte, uint64_t y)
+{
+	GhosttyGridRef ref = GHOSTTY_INIT_SIZED(GhosttyGridRef);
+	GhosttyRowSemanticPrompt prompt;
+	GhosttyRow row;
+	GhosttyPoint point = {
+		.tag = GHOSTTY_POINT_TAG_SCREEN,
+		.value = {.coordinate = {.x = 0, .y = y}},
+	};
+
+	if (ghostty_terminal_grid_ref(vte->term, point, &ref) != GHOSTTY_SUCCESS)
+		return false;
+	if (ghostty_grid_ref_row(&ref, &row) != GHOSTTY_SUCCESS)
+		return false;
+	if (ghostty_row_get(row, GHOSTTY_ROW_DATA_SEMANTIC_PROMPT, &prompt) != GHOSTTY_SUCCESS)
+		return false;
+
+	return prompt == GHOSTTY_ROW_SEMANTIC_PROMPT;
+}
+
+int kmscon_vte_jump_to_prompt(struct kmscon_vte *vte, int delta)
+{
+	struct kmscon_vte_scrollbar sb;
+	int step = delta < 0 ? -1 : 1;
+	unsigned int todo;
+	int64_t row;
+
+	if (!vte || !delta)
+		return -EINVAL;
+
+	kmscon_vte_get_scrollbar(vte, &sb);
+	if (!sb.total)
+		return -ENOENT;
+
+	todo = delta < 0 ? -delta : delta;
+	row = (int64_t)sb.offset;
+
+	while (todo) {
+		row += step;
+		if (row < 0 || (uint64_t)row >= sb.total)
+			return -ENOENT;
+		if (row_is_prompt(vte, (uint64_t)row))
+			--todo;
+	}
+
+	ghostty_terminal_scroll_viewport(vte->term, (GhosttyTerminalScrollViewport){
+							    .tag = GHOSTTY_SCROLL_VIEWPORT_ROW,
+							    .value = {.row = (size_t)row},
+						    });
+	return 0;
+}
+
 void kmscon_vte_sb_reset(struct kmscon_vte *vte)
 {
 	GhosttyTerminalScrollViewport behavior = {.tag = GHOSTTY_SCROLL_VIEWPORT_BOTTOM};
@@ -1350,6 +1404,26 @@ void kmscon_vte_selection_word(struct kmscon_vte *vte, unsigned int x, unsigned 
 	if (!viewport_ref(vte, x, y, &opts.ref))
 		return;
 	if (ghostty_terminal_select_word(vte->term, &opts, &sel) != GHOSTTY_SUCCESS)
+		return;
+
+	set_selection(vte, &sel);
+}
+
+void kmscon_vte_selection_output(struct kmscon_vte *vte, unsigned int x, unsigned int y)
+{
+	GhosttySelection sel = GHOSTTY_INIT_SIZED(GhosttySelection);
+	GhosttyGridRef ref;
+
+	if (!vte)
+		return;
+
+	kmscon_vte_selection_reset(vte);
+	if (!viewport_ref(vte, x, y, &ref))
+		return;
+
+	/* Without shell integration the terminal does not know where the
+	 * output of a command starts and ends, so this does nothing. */
+	if (ghostty_terminal_select_output(vte->term, ref, &sel) != GHOSTTY_SUCCESS)
 		return;
 
 	set_selection(vte, &sel);

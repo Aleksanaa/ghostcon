@@ -203,10 +203,18 @@ void kmscon_vte_sb_page_up(struct kmscon_vte *vte, unsigned int num);
 void kmscon_vte_sb_page_down(struct kmscon_vte *vte, unsigned int num);
 void kmscon_vte_sb_reset(struct kmscon_vte *vte);
 
+/* Scroll to the @delta'th shell prompt above (negative) or below (positive)
+ * the top of the viewport. Needs a shell that emits OSC 133. */
+int kmscon_vte_jump_to_prompt(struct kmscon_vte *vte, int delta);
+
 void kmscon_vte_selection_reset(struct kmscon_vte *vte);
 void kmscon_vte_selection_start(struct kmscon_vte *vte, unsigned int x, unsigned int y);
 void kmscon_vte_selection_target(struct kmscon_vte *vte, unsigned int x, unsigned int y);
 void kmscon_vte_selection_word(struct kmscon_vte *vte, unsigned int x, unsigned int y);
+
+/* Select the whole output of the command below the given position. Needs a
+ * shell that emits OSC 133. */
+void kmscon_vte_selection_output(struct kmscon_vte *vte, unsigned int x, unsigned int y);
 int kmscon_vte_selection_copy(struct kmscon_vte *vte, char **out);
 
 bool kmscon_vte_handle_keyboard(struct kmscon_vte *vte, uint16_t keycode, uint32_t ascii,

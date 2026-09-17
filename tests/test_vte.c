@@ -3,6 +3,7 @@
  */
 
 #include <assert.h>
+#include <errno.h>
 #include <linux/input-event-codes.h>
 #include <stdint.h>
 #include <stdio.h>
@@ -464,6 +465,73 @@ static void test_effects(void)
 	kmscon_vte_free(vte);
 }
 
+/* Feed a prompt, the command the user typed and its output, the way a shell
+ * with kmscon's shell integration marks them up. */
+static void shell_command(struct kmscon_vte *vte, const char *cmd, const char *output)
+{
+	input_str(vte, "\033]133;A\007$ \033]133;B\007");
+	input_str(vte, cmd);
+	input_str(vte, "\033]133;C\007\r\n");
+	input_str(vte, output);
+	input_str(vte, "\r\n\033]133;D;0\007");
+}
+
+static void test_shell_integration(void)
+{
+	struct kmscon_vte_screen screen;
+	struct kmscon_vte *vte;
+	struct sink sink;
+	char *copy = NULL;
+	int len;
+
+	vte = new_vte(&sink);
+
+	/* five prompts, each with one line of output, so that the screen of
+	 * five rows leaves earlier prompts in the scrollback */
+	shell_command(vte, "one", "first");
+	shell_command(vte, "two", "second");
+	shell_command(vte, "three", "third");
+	shell_command(vte, "four", "fourth");
+	shell_command(vte, "five", "fifth");
+	input_str(vte, "\033]133;A\007$ \033]133;B\007");
+
+	/* jumping up puts the previous prompt at the top of the viewport */
+	assert(!kmscon_vte_jump_to_prompt(vte, -1));
+	assert(!kmscon_vte_draw(vte, &screen));
+	assert(cell_at(&screen, 0, 0)->ch == '$');
+	assert(cell_at(&screen, 2, 0)->ch == 't');
+	assert(cell_at(&screen, 3, 0)->ch == 'h');
+
+	/* and again for the prompt above that one, output lines are skipped */
+	assert(!kmscon_vte_jump_to_prompt(vte, -1));
+	assert(!kmscon_vte_draw(vte, &screen));
+	assert(cell_at(&screen, 2, 0)->ch == 't');
+	assert(cell_at(&screen, 3, 0)->ch == 'w');
+
+	/* jumping back down returns to the later prompt */
+	assert(!kmscon_vte_jump_to_prompt(vte, 1));
+	assert(!kmscon_vte_draw(vte, &screen));
+	assert(cell_at(&screen, 3, 0)->ch == 'h');
+
+	/* running out of prompts is reported and the viewport does not move */
+	assert(kmscon_vte_jump_to_prompt(vte, -100) == -ENOENT);
+	assert(!kmscon_vte_draw(vte, &screen));
+	assert(cell_at(&screen, 3, 0)->ch == 'h');
+
+	assert(kmscon_vte_jump_to_prompt(vte, 0) == -EINVAL);
+
+	/* selecting the output of a command picks up that command's output
+	 * only, not the prompt or the command line */
+	kmscon_vte_sb_reset(vte);
+	kmscon_vte_selection_output(vte, 0, 3);
+	len = kmscon_vte_selection_copy(vte, &copy);
+	assert(len > 0);
+	assert(!strcmp(copy, "fifth"));
+	free(copy);
+
+	kmscon_vte_free(vte);
+}
+
 static void test_cursor(void)
 {
 	struct kmscon_vte_screen screen;
@@ -753,6 +821,7 @@ int main(void)
 	test_mouse();
 	test_paste();
 	test_effects();
+	test_shell_integration();
 	test_cursor();
 	test_clipboard_write();
 	test_focus();

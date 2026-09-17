@@ -529,6 +529,24 @@
       </varlistentry>
 
       <varlistentry>
+        <term><option>--grab-prompt-up {grab}</option></term>
+        <listitem>
+          <para>Scroll to the previous shell prompt. This needs a shell that
+                reports its prompts, see the
+                <emphasis>Shell Integration</emphasis> section.
+                (default: &lt;Ctrl&gt;&lt;Shift&gt;Up)</para>
+        </listitem>
+      </varlistentry>
+
+      <varlistentry>
+        <term><option>--grab-prompt-down {grab}</option></term>
+        <listitem>
+          <para>Scroll to the next shell prompt.
+                (default: &lt;Ctrl&gt;&lt;Shift&gt;Down)</para>
+        </listitem>
+      </varlistentry>
+
+      <varlistentry>
         <term><option>--grab-zoom-in {grab}</option></term>
         <listitem>
           <para>Increase font size of the current terminal.
@@ -1019,6 +1037,45 @@
           This is done via VT APIs on seat0. But note that if the kernel is
           compiled without CONFIG_VT (which controls whether VTs are available),
           then even seat0 does not have VTs.</para>
+  </refsect1>
+
+  <refsect1>
+    <title>Shell Integration</title>
+    <para>KMSCON can tell prompts, the commands you type and the output of
+          those commands apart, but only if the shell says where each of them
+          begins and ends. Shells do that with the OSC 133 escape sequences,
+          and KMSCON ships a script per shell that sets this up.</para>
+
+    <para>Source the script for your shell from its startup file:</para>
+    <programlisting>
+# ~/.bashrc
+source @DATA_DIR@/kmscon/shell-integration/kmscon-integration.bash
+
+# ~/.zshrc
+source @DATA_DIR@/kmscon/shell-integration/kmscon-integration.zsh
+
+# ~/.config/fish/config.fish
+source @DATA_DIR@/kmscon/shell-integration/kmscon-integration.fish
+    </programlisting>
+
+    <para>The scripts do nothing unless the shell is interactive and
+          <envar>KMSCON_SHELL_INTEGRATION</envar> is set in the environment,
+          which KMSCON does for the process it starts. Sourcing them from a
+          shared startup file is therefore safe on other terminals.</para>
+
+    <para>The fish script is only needed for fish older than 3.6, which
+          reports prompts and commands by itself; on a newer fish the script
+          does nothing. Source it at the end of the configuration, after your
+          own prompt has been defined, as it wraps
+          <function>fish_prompt</function>. The bash and zsh scripts attach
+          their marker to the prompt every time a prompt is drawn, so they can
+          be sourced at any point and work with prompt themes that rebuild
+          <envar>PS1</envar>.</para>
+
+    <para>With this in place, <option>--grab-prompt-up</option> and
+          <option>--grab-prompt-down</option> scroll from prompt to prompt, and
+          holding control while double-clicking selects the whole output of the
+          command below the pointer instead of a single word.</para>
   </refsect1>
 
   <refsect1>

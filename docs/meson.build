@@ -9,6 +9,7 @@ manpages = {
 
 data = configuration_data()
 data.set('CONFIG_DIR', prefix / sysconfdir)
+data.set('DATA_DIR', prefix / datadir)
 
 foreach section, pages : manpages
     foreach page : pages

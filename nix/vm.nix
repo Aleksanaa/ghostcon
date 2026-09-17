@@ -54,6 +54,10 @@
     };
   };
 
+  programs.bash.interactiveShellInit = ''
+    source ${pkgs.kmscon}/share/kmscon/shell-integration/kmscon-integration.bash
+  '';
+
   environment.systemPackages = with pkgs; [
     vttest
     htop

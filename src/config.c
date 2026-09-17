@@ -167,6 +167,12 @@ static void print_help()
 		"\t                                  Shortcut to scroll page up\n"
 		"\t    --grab-page-down <grab>     [<Shift>Next]\n"
 		"\t                                  Shortcut to scroll page down\n"
+		"\t    --grab-prompt-up <grab>     [<Ctrl><Shift>Up]\n"
+		"\t                                  Shortcut to scroll to the previous\n"
+		"\t                                  shell prompt\n"
+		"\t    --grab-prompt-down <grab>   [<Ctrl><Shift>Down]\n"
+		"\t                                  Shortcut to scroll to the next\n"
+		"\t                                  shell prompt\n"
 		"\t    --grab-zoom-in <grab>       [<Ctrl>plus]\n"
 		"\t                                  Shortcut to increase font size\n"
 		"\t    --grab-zoom-out <grab>      [<Ctrl>minus]\n"
@@ -735,6 +741,12 @@ static struct conf_grab def_grab_page_up = CONF_SINGLE_GRAB(SHL_SHIFT_MASK, XKB_
 
 static struct conf_grab def_grab_page_down = CONF_SINGLE_GRAB(SHL_SHIFT_MASK, XKB_KEY_Next);
 
+static struct conf_grab def_grab_prompt_up =
+	CONF_SINGLE_GRAB(SHL_SHIFT_MASK | SHL_CONTROL_MASK, XKB_KEY_Up);
+
+static struct conf_grab def_grab_prompt_down =
+	CONF_SINGLE_GRAB(SHL_SHIFT_MASK | SHL_CONTROL_MASK, XKB_KEY_Down);
+
 static struct conf_grab def_grab_zoom_in =
 	CONF_DUAL_GRAB(SHL_CONTROL_MASK, XKB_KEY_plus, XKB_KEY_equal);
 
@@ -760,25 +772,25 @@ static struct conf_grab def_grab_rotate_ccw = CONF_SINGLE_GRAB(SHL_LOGO_MASK, XK
 static double def_min_contrast = 1.0;
 
 static palette_t def_palette = {
-	[KMSCON_COLOR_BLACK] = {0, 0, 0},		   /* black */
-	[KMSCON_COLOR_RED] = {205, 0, 0},		   /* red */
-	[KMSCON_COLOR_GREEN] = {0, 205, 0},	   /* green */
-	[KMSCON_COLOR_YELLOW] = {205, 205, 0},	   /* yellow */
-	[KMSCON_COLOR_BLUE] = {0, 0, 238},		   /* blue */
-	[KMSCON_COLOR_MAGENTA] = {205, 0, 205},	   /* magenta */
-	[KMSCON_COLOR_CYAN] = {0, 205, 205},	   /* cyan */
+	[KMSCON_COLOR_BLACK] = {0, 0, 0},	      /* black */
+	[KMSCON_COLOR_RED] = {205, 0, 0},	      /* red */
+	[KMSCON_COLOR_GREEN] = {0, 205, 0},	      /* green */
+	[KMSCON_COLOR_YELLOW] = {205, 205, 0},	      /* yellow */
+	[KMSCON_COLOR_BLUE] = {0, 0, 238},	      /* blue */
+	[KMSCON_COLOR_MAGENTA] = {205, 0, 205},	      /* magenta */
+	[KMSCON_COLOR_CYAN] = {0, 205, 205},	      /* cyan */
 	[KMSCON_COLOR_LIGHT_GREY] = {229, 229, 229},  /* light grey */
 	[KMSCON_COLOR_DARK_GREY] = {127, 127, 127},   /* dark grey */
-	[KMSCON_COLOR_LIGHT_RED] = {255, 0, 0},	   /* light red */
-	[KMSCON_COLOR_LIGHT_GREEN] = {0, 255, 0},	   /* light green */
+	[KMSCON_COLOR_LIGHT_RED] = {255, 0, 0},	      /* light red */
+	[KMSCON_COLOR_LIGHT_GREEN] = {0, 255, 0},     /* light green */
 	[KMSCON_COLOR_LIGHT_YELLOW] = {255, 255, 0},  /* light yellow */
-	[KMSCON_COLOR_LIGHT_BLUE] = {92, 92, 255},	   /* light blue */
+	[KMSCON_COLOR_LIGHT_BLUE] = {92, 92, 255},    /* light blue */
 	[KMSCON_COLOR_LIGHT_MAGENTA] = {255, 0, 255}, /* light magenta */
-	[KMSCON_COLOR_LIGHT_CYAN] = {0, 255, 255},	   /* light cyan */
-	[KMSCON_COLOR_WHITE] = {255, 255, 255},	   /* white */
+	[KMSCON_COLOR_LIGHT_CYAN] = {0, 255, 255},    /* light cyan */
+	[KMSCON_COLOR_WHITE] = {255, 255, 255},	      /* white */
 
 	[KMSCON_COLOR_FOREGROUND] = {229, 229, 229}, /* light grey */
-	[KMSCON_COLOR_BACKGROUND] = {0, 0, 0},	  /* black */
+	[KMSCON_COLOR_BACKGROUND] = {0, 0, 0},	     /* black */
 };
 
 int kmscon_conf_new(struct conf_ctx **out)
@@ -855,6 +867,9 @@ int kmscon_conf_new(struct conf_ctx **out)
 				 &def_grab_scroll_down),
 		CONF_OPTION_GRAB(0, "grab-page-up", &conf->grab_page_up, &def_grab_page_up),
 		CONF_OPTION_GRAB(0, "grab-page-down", &conf->grab_page_down, &def_grab_page_down),
+		CONF_OPTION_GRAB(0, "grab-prompt-up", &conf->grab_prompt_up, &def_grab_prompt_up),
+		CONF_OPTION_GRAB(0, "grab-prompt-down", &conf->grab_prompt_down,
+				 &def_grab_prompt_down),
 		CONF_OPTION_GRAB(0, "grab-zoom-in", &conf->grab_zoom_in, &def_grab_zoom_in),
 		CONF_OPTION_GRAB(0, "grab-zoom-out", &conf->grab_zoom_out, &def_grab_zoom_out),
 		CONF_OPTION_GRAB(0, "grab-session-next", &conf->grab_session_next,
@@ -896,20 +911,27 @@ int kmscon_conf_new(struct conf_ctx **out)
 		CONF_OPTION_COLOR("palette-blue", conf->custom_palette, KMSCON_COLOR_BLUE),
 		CONF_OPTION_COLOR("palette-magenta", conf->custom_palette, KMSCON_COLOR_MAGENTA),
 		CONF_OPTION_COLOR("palette-cyan", conf->custom_palette, KMSCON_COLOR_CYAN),
-		CONF_OPTION_COLOR("palette-light-grey", conf->custom_palette, KMSCON_COLOR_LIGHT_GREY),
-		CONF_OPTION_COLOR("palette-dark-grey", conf->custom_palette, KMSCON_COLOR_DARK_GREY),
-		CONF_OPTION_COLOR("palette-light-red", conf->custom_palette, KMSCON_COLOR_LIGHT_RED),
+		CONF_OPTION_COLOR("palette-light-grey", conf->custom_palette,
+				  KMSCON_COLOR_LIGHT_GREY),
+		CONF_OPTION_COLOR("palette-dark-grey", conf->custom_palette,
+				  KMSCON_COLOR_DARK_GREY),
+		CONF_OPTION_COLOR("palette-light-red", conf->custom_palette,
+				  KMSCON_COLOR_LIGHT_RED),
 		CONF_OPTION_COLOR("palette-light-green", conf->custom_palette,
 				  KMSCON_COLOR_LIGHT_GREEN),
 		CONF_OPTION_COLOR("palette-light-yellow", conf->custom_palette,
 				  KMSCON_COLOR_LIGHT_YELLOW),
-		CONF_OPTION_COLOR("palette-light-blue", conf->custom_palette, KMSCON_COLOR_LIGHT_BLUE),
+		CONF_OPTION_COLOR("palette-light-blue", conf->custom_palette,
+				  KMSCON_COLOR_LIGHT_BLUE),
 		CONF_OPTION_COLOR("palette-light-magenta", conf->custom_palette,
 				  KMSCON_COLOR_LIGHT_MAGENTA),
-		CONF_OPTION_COLOR("palette-light-cyan", conf->custom_palette, KMSCON_COLOR_LIGHT_CYAN),
+		CONF_OPTION_COLOR("palette-light-cyan", conf->custom_palette,
+				  KMSCON_COLOR_LIGHT_CYAN),
 		CONF_OPTION_COLOR("palette-white", conf->custom_palette, KMSCON_COLOR_WHITE),
-		CONF_OPTION_COLOR("palette-foreground", conf->custom_palette, KMSCON_COLOR_FOREGROUND),
-		CONF_OPTION_COLOR("palette-background", conf->custom_palette, KMSCON_COLOR_BACKGROUND),
+		CONF_OPTION_COLOR("palette-foreground", conf->custom_palette,
+				  KMSCON_COLOR_FOREGROUND),
+		CONF_OPTION_COLOR("palette-background", conf->custom_palette,
+				  KMSCON_COLOR_BACKGROUND),
 	};
 
 	ret = conf_ctx_new(&ctx, options, sizeof(options) / sizeof(*options), conf);

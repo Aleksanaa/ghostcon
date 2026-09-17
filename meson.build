@@ -281,6 +281,14 @@ if enable_libseat
     )
 endif
 
+# Shell integration
+install_data(
+    'scripts/shell-integration/kmscon-integration.bash',
+    'scripts/shell-integration/kmscon-integration.zsh',
+    'scripts/shell-integration/kmscon-integration.fish',
+    install_dir: datadir / 'kmscon' / 'shell-integration',
+)
+
 # Terminfo
 terminfo_src = files('scripts/terminfo/kmscon.ti')
 
