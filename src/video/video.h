@@ -158,6 +158,10 @@ int display_setup_cursor(struct display *disp, const uint32_t *pixels, unsigned 
 			 unsigned int height, int hot_x, int hot_y);
 void display_destroy_cursor(struct display *disp);
 int display_show_cursor(struct display *disp, int32_t x, int32_t y);
+
+/* Refresh rate of the mode this display is running, in Hz. Returns 0 when the
+ * backend cannot tell us, for instance on fbdev. */
+unsigned int display_get_refresh_rate(struct display *disp);
 int display_hide_cursor(struct display *disp);
 void display_set_cursor_offset(struct display *disp, int32_t x, int32_t y);
 

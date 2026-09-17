@@ -56,6 +56,8 @@ struct display_ops {
 	int (*show_cursor)(struct display *disp, int32_t x, int32_t y);
 	int (*hide_cursor)(struct display *disp);
 	void (*set_cursor_offset)(struct display *disp, int32_t x, int32_t y);
+	/* refresh rate of the current mode in Hz, 0 when it is not known */
+	unsigned int (*get_refresh)(struct display *disp);
 };
 
 struct video_ops {

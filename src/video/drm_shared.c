@@ -491,6 +491,29 @@ int drm_display_hide_cursor(struct display *disp)
 	return 0;
 }
 
+/*
+ * Refresh rate of the mode we are running, in Hz. Most drivers fill in
+ * vrefresh, but it is optional, so fall back to working it out of the timings.
+ */
+unsigned int drm_display_get_refresh(struct display *disp)
+{
+	struct drm_display *ddrm = disp->data;
+	drmModeModeInfo *mode = ddrm->current_mode;
+	uint64_t total;
+
+	if (!mode)
+		return 0;
+
+	if (mode->vrefresh)
+		return mode->vrefresh;
+
+	total = (uint64_t)mode->htotal * mode->vtotal;
+	if (!total)
+		return 0;
+
+	return (unsigned int)(((uint64_t)mode->clock * 1000 + total / 2) / total);
+}
+
 void drm_display_set_cursor_offset(struct display *disp, int32_t x, int32_t y)
 {
 	struct drm_display *ddrm = disp->data;

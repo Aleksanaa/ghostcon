@@ -361,6 +361,15 @@ void display_destroy_cursor(struct display *disp)
 }
 
 SHL_EXPORT
+SHL_EXPORT
+unsigned int display_get_refresh_rate(struct display *disp)
+{
+	if (!disp || !display_is_online(disp) || !disp->ops->get_refresh)
+		return 0;
+
+	return disp->ops->get_refresh(disp);
+}
+
 int display_show_cursor(struct display *disp, int32_t x, int32_t y)
 {
 	if (!disp || !display_is_online(disp) || !video_is_awake(disp->video))

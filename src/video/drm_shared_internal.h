@@ -96,6 +96,7 @@ int drm_display_setup_cursor(struct display *disp, const uint32_t *pixels, unsig
 			     unsigned int height, int hot_x, int hot_y);
 void drm_display_destroy_cursor(struct display *disp);
 int drm_display_show_cursor(struct display *disp, int32_t x, int32_t y);
+unsigned int drm_display_get_refresh(struct display *disp);
 int drm_display_hide_cursor(struct display *disp);
 void drm_display_set_cursor_offset(struct display *disp, int32_t x, int32_t y);
 int drm_display_wait_pflip(struct display *disp);

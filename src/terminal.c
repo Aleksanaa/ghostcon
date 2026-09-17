@@ -117,15 +117,6 @@ struct kmscon_terminal {
 	struct kmscon_asciinema *asciinema;
 };
 
-/*
- * An application that floods the terminal can ask for a redraw far more often
- * than anyone can see one. Frames are therefore paced: whatever the terminal
- * does between two of them is folded into the next, which is exactly what the
- * dirty tracking in the vte is for.
- */
-#define MAX_FPS 60
-#define FRAME_INTERVAL_NS (1000000000ULL / MAX_FPS)
-
 #define BLINK_TIMER_NS (500 * 1000 * 1000) // Blinking interval 500ms
 #define BLINK_CURSOR_TYPING 1		   // After keypress, wait 1s before blinking the cursor
 
@@ -150,13 +141,16 @@ static void coord_to_cell(struct kmscon_terminal *term, int32_t x, int32_t y, un
 }
 
 /*
- * The pointer is painted over the cells rather than into them, so a frame that
- * has to move it or take it away cannot be skipped. One that is already on
- * screen in the right place costs nothing.
+ * A frame that has to move the pointer or take it away cannot be skipped; one
+ * that already shows it in the right place costs nothing.
+ *
+ * This holds for the hardware cursor too, even though nothing is painted for
+ * it: the cursor plane is only programmed by the atomic commit that puts a
+ * frame on screen, so without a frame the pointer simply does not move.
  */
 static bool pointer_needs_frame(struct screen *scr)
 {
-	if (!scr->term->pointer.visible || scr->hw_cursor)
+	if (!scr->term->pointer.visible)
 		return scr->pointer_drawn;
 
 	return !scr->pointer_drawn || scr->pointer_x != scr->term->pointer.x ||
@@ -165,15 +159,21 @@ static bool pointer_needs_frame(struct screen *scr)
 
 static void draw_pointer(struct screen *scr)
 {
-	if (!scr->term->pointer.visible || scr->hw_cursor) {
+	if (!scr->term->pointer.visible) {
 		scr->pointer_drawn = false;
 		return;
 	}
 
-	kmscon_text_draw_pointer(scr->txt, scr->term->pointer.x, scr->term->pointer.y);
+	/* remember what this frame is about to put on screen */
 	scr->pointer_x = scr->term->pointer.x;
 	scr->pointer_y = scr->term->pointer.y;
 	scr->pointer_drawn = true;
+
+	/* the cursor plane carries the hardware one, there is no glyph to paint */
+	if (scr->hw_cursor)
+		return;
+
+	kmscon_text_draw_pointer(scr->txt, scr->term->pointer.x, scr->term->pointer.y);
 }
 
 static inline uint32_t argb(uint8_t a, uint8_t r, uint8_t g, uint8_t b)
@@ -422,16 +422,59 @@ static void frame_event(struct ev_timer *timer, uint64_t count, void *data)
 		draw_all_now(term);
 }
 
+/*
+ * An application that floods the terminal can ask for a redraw far more often
+ * than anyone can see one, and on a machine without a GPU every one of those
+ * frames is paid for in software rasterisation. Frames are therefore paced;
+ * whatever the terminal does in between is folded into the next one, which is
+ * what the dirty tracking in the vte is for.
+ *
+ * The rate comes from the displays themselves. The fastest one wins, so that
+ * pairing a slow panel with a quick one does not starve the quick one.
+ */
+static uint64_t frame_interval(struct kmscon_terminal *term)
+{
+	struct shl_dlist *iter;
+	struct screen *scr;
+	unsigned int hz = 0, rate;
+
+	shl_dlist_for_each(iter, &term->screens)
+	{
+		scr = shl_dlist_entry(iter, struct screen, list);
+		rate = display_get_refresh_rate(scr->disp);
+		if (rate > hz)
+			hz = rate;
+	}
+
+	if (!hz)
+		return 0;
+
+	return 1000000000ULL / hz;
+}
+
 static void redraw_all(struct kmscon_terminal *term)
 {
 	struct itimerspec spec = {.it_interval = {0, 0}};
-	uint64_t elapsed;
+	uint64_t interval, elapsed;
 
 	if (!term->awake)
 		return;
 
+	interval = frame_interval(term);
+	if (!interval) {
+		draw_all_now(term);
+		return;
+	}
+
+	/*
+	 * A display that waits for vsync has already paced us, and a timer on
+	 * top of that only does harm: it wakes just after the vblank deadline
+	 * and the frame then waits for the one after it, halving the rate.
+	 * So only hold a frame back when the last one was far too recent to be
+	 * explained by the display having waited for anything.
+	 */
 	elapsed = now_ns() - term->last_frame;
-	if (elapsed >= FRAME_INTERVAL_NS) {
+	if (elapsed * 4 >= interval * 3) {
 		draw_all_now(term);
 		return;
 	}
@@ -440,7 +483,7 @@ static void redraw_all(struct kmscon_terminal *term)
 	if (term->frame_armed)
 		return;
 
-	spec.it_value.tv_nsec = FRAME_INTERVAL_NS - elapsed;
+	spec.it_value.tv_nsec = interval - elapsed;
 	if (ev_timer_update(term->frame_timer, &spec))
 		return;
 	if (ev_timer_enable(term->frame_timer))
@@ -1224,6 +1267,8 @@ static void pointer_event(struct input *input, struct input_pointer_event *ev, v
 		kmscon_vte_selection_reset(term->vte);
 		term->pointer.visible = false;
 		hw_cursor_hide(term);
+		/* taking the pointer away needs a frame just like moving it */
+		redraw_all(term);
 		break;
 	}
 }
@@ -1406,7 +1451,7 @@ struct kmscon_terminal *terminal_new(struct kmscon_session *session, unsigned in
 	};
 	struct itimerspec frame_interval = {
 		.it_interval = {0, 0},
-		.it_value = {0, FRAME_INTERVAL_NS},
+		.it_value = {0, 1000000},
 	};
 	int ret;
 

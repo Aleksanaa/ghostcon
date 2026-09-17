@@ -237,6 +237,7 @@ static const struct display_ops drm2d_display_ops = {
 	.setup_cursor = drm_display_setup_cursor,
 	.destroy_cursor = drm_display_destroy_cursor,
 	.show_cursor = drm_display_show_cursor,
+	.get_refresh = drm_display_get_refresh,
 	.hide_cursor = drm_display_hide_cursor,
 	.set_cursor_offset = drm_display_set_cursor_offset,
 };
