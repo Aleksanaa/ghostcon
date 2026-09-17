@@ -17,8 +17,6 @@
   users.users.root.password = "root";
   services.getty.autologinUser = "demo";
 
-  security.sudo.wheelNeedsPassword = false;
-
   networking.hostName = if baseline then "kmscon-baseline" else "kmscon-ghostcon";
 
   hardware.graphics.enable = true;
@@ -71,7 +69,6 @@
 
   environment.systemPackages = with pkgs; [
     vttest
-    linuxPackages.perf
     termbench-pro
     vtebench
     notcurses

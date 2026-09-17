@@ -418,11 +418,6 @@ static int send_buf(struct kmscon_pty *pty)
 	return 0;
 }
 
-/* throwaway instrumentation, see the counters in terminal.c */
-unsigned long long kmscon_stat_reads;
-unsigned long long kmscon_stat_bytes;
-unsigned long long kmscon_stat_drains;
-
 static int read_buf(struct kmscon_pty *pty)
 {
 	ssize_t len, num;
@@ -435,8 +430,6 @@ static int read_buf(struct kmscon_pty *pty)
 	do {
 		len = read(pty->fd, pty->io_buf, sizeof(pty->io_buf));
 		if (len > 0) {
-			kmscon_stat_reads++;
-			kmscon_stat_bytes += len;
 			if (pty->input_cb)
 				pty->input_cb(pty, pty->io_buf, len, pty->data);
 		} else if (len == 0) {
@@ -447,8 +440,6 @@ static int read_buf(struct kmscon_pty *pty)
 			break;
 		}
 	} while (len > 0 && --num);
-
-	kmscon_stat_drains++;
 
 	/* One frame for the whole burst rather than one per read: the terminal
 	 * has already folded every byte of it into its own state. */

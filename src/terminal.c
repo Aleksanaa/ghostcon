@@ -104,8 +104,22 @@ struct kmscon_terminal {
 	struct ev_timer *blink_timer;
 	struct ev_timer *blink_cursor;
 
+	/* frame pacing, see redraw_all() */
+	struct ev_timer *frame_timer;
+	uint64_t last_frame;
+	bool frame_armed;
+
 	struct kmscon_asciinema *asciinema;
 };
+
+/*
+ * An application that floods the terminal can ask for a redraw far more often
+ * than anyone can see one. Frames are therefore paced: whatever the terminal
+ * does between two of them is folded into the next, which is exactly what the
+ * dirty tracking in the vte is for.
+ */
+#define MAX_FPS 60
+#define FRAME_INTERVAL_NS (1000000000ULL / MAX_FPS)
 
 #define BLINK_TIMER_NS (500 * 1000 * 1000) // Blinking interval 500ms
 #define BLINK_CURSOR_TYPING 1		   // After keypress, wait 1s before blinking the cursor
@@ -293,20 +307,6 @@ static void disable_screen(struct screen *scr)
 	scr->enabled = false;
 }
 
-/* throwaway instrumentation */
-extern unsigned long long kmscon_stat_reads;
-extern unsigned long long kmscon_stat_bytes;
-extern unsigned long long kmscon_stat_drains;
-static unsigned long long stat_rounds, stat_drawn, stat_skipped;
-static unsigned long long stat_swap_ok, stat_swap_fail, stat_deferred;
-
-static void stat_report(void)
-{
-	log_notice("STAT reads=%llu bytes=%llu drains=%llu rounds=%llu drawn=%llu skipped=%llu swap_ok=%llu swap_fail=%llu deferred=%llu",
-		   kmscon_stat_reads, kmscon_stat_bytes, kmscon_stat_drains, stat_rounds,
-		   stat_drawn, stat_skipped, stat_swap_ok, stat_swap_fail, stat_deferred);
-}
-
 static void do_redraw_screen(struct screen *scr)
 {
 	bool force;
@@ -328,17 +328,10 @@ static void do_redraw_screen(struct screen *scr)
 	 * so a frame that shows it can never be skipped. */
 	force = scr->term->pointer.visible && !scr->hw_cursor;
 
-	stat_rounds++;
 	ret = kmscon_text_prepare(scr->txt, scr->term->vte, force);
-	if (ret <= 0)
-		stat_skipped++;
 	if (ret <= 0)
 		/* the screen already shows this frame, leave it alone */
 		return;
-
-	stat_drawn++;
-	if (!(stat_drawn % 100))
-		stat_report();
 
 	kmscon_text_draw(scr->txt);
 	draw_pointer(scr);
@@ -352,12 +345,10 @@ static void do_redraw_screen(struct screen *scr)
 		/* The frame was drawn but never reached the screen, so the
 		 * renderer must not believe it is up to date. Without this the
 		 * screen would keep whatever it had, forever. */
-		stat_swap_fail++;
 		kmscon_text_invalidate(scr->txt);
 		return;
 	}
 
-	stat_swap_ok++;
 	scr->swapping = true;
 }
 
@@ -366,27 +357,70 @@ static void redraw_screen(struct screen *scr)
 	if (!scr->term->awake || !scr->enabled)
 		return;
 
-	if (scr->swapping) {
-		stat_deferred++;
+	if (scr->swapping)
 		scr->pending = true;
-	} else {
+	else
 		do_redraw_screen(scr);
-	}
 }
 
-static void redraw_all(struct kmscon_terminal *term)
+static uint64_t now_ns(void)
+{
+	struct timespec ts;
+
+	clock_gettime(CLOCK_MONOTONIC, &ts);
+	return (uint64_t)ts.tv_sec * 1000000000ULL + ts.tv_nsec;
+}
+
+static void draw_all_now(struct kmscon_terminal *term)
 {
 	struct shl_dlist *iter;
 	struct screen *scr;
 
-	if (!term->awake)
-		return;
+	term->last_frame = now_ns();
 
 	shl_dlist_for_each(iter, &term->screens)
 	{
 		scr = shl_dlist_entry(iter, struct screen, list);
 		redraw_screen(scr);
 	}
+}
+
+static void frame_event(struct ev_timer *timer, uint64_t count, void *data)
+{
+	struct kmscon_terminal *term = data;
+
+	term->frame_armed = false;
+	ev_timer_disable(term->frame_timer);
+
+	if (term->awake)
+		draw_all_now(term);
+}
+
+static void redraw_all(struct kmscon_terminal *term)
+{
+	struct itimerspec spec = {.it_interval = {0, 0}};
+	uint64_t elapsed;
+
+	if (!term->awake)
+		return;
+
+	elapsed = now_ns() - term->last_frame;
+	if (elapsed >= FRAME_INTERVAL_NS) {
+		draw_all_now(term);
+		return;
+	}
+
+	/* too soon: let the timer pick up everything that happens until then */
+	if (term->frame_armed)
+		return;
+
+	spec.it_value.tv_nsec = FRAME_INTERVAL_NS - elapsed;
+	if (ev_timer_update(term->frame_timer, &spec))
+		return;
+	if (ev_timer_enable(term->frame_timer))
+		return;
+
+	term->frame_armed = true;
 }
 
 static bool has_kms_display(struct kmscon_terminal *term)
@@ -466,8 +500,12 @@ static void display_pageflip(void *unused, void *unused2, void *data)
 	struct screen *scr = data;
 
 	scr->swapping = false;
+
+	/* A finished pageflip is the other way into a frame, so it has to be
+	 * paced like the rest. Without this a screen that keeps deferring
+	 * frames redraws at whatever rate the flips come back at. */
 	if (scr->pending)
-		do_redraw_screen(scr);
+		redraw_all(scr->term);
 }
 
 static void blink_event(struct ev_timer *timer, uint64_t count, void *data)
@@ -1274,6 +1312,7 @@ void terminal_destroy(struct kmscon_terminal *term)
 
 	terminal_close(term);
 	rm_all_screens(term);
+	ev_eloop_rm_timer(term->frame_timer);
 	ev_eloop_rm_timer(term->blink_timer);
 	ev_eloop_rm_timer(term->blink_cursor);
 	kmscon_asciinema_free(term->asciinema);
@@ -1338,6 +1377,10 @@ struct kmscon_terminal *terminal_new(struct kmscon_session *session, unsigned in
 	struct itimerspec blink_interval = {
 		.it_interval = {0, BLINK_TIMER_NS},
 		.it_value = {0, BLINK_TIMER_NS},
+	};
+	struct itimerspec frame_interval = {
+		.it_interval = {0, 0},
+		.it_value = {0, FRAME_INTERVAL_NS},
 	};
 	int ret;
 
@@ -1416,11 +1459,18 @@ struct kmscon_terminal *terminal_new(struct kmscon_session *session, unsigned in
 		if (ret)
 			goto err_input;
 	}
+	/* one-shot, armed only when a frame comes too soon after the last */
+	ret = ev_eloop_new_timer(term->eloop, &term->frame_timer, &frame_interval, frame_event,
+				 term);
+	if (ret)
+		goto err_pointer;
+	ev_timer_disable(term->frame_timer);
+
 	if (term->conf->blink) {
 		ret = ev_eloop_new_timer(term->eloop, &term->blink_timer, &blink_interval,
 					 blink_event, term);
 		if (ret)
-			goto err_pointer;
+			goto err_frame;
 		ret = ev_eloop_new_timer(term->eloop, &term->blink_cursor, &blink_interval,
 					 cursor_blink_event, term);
 		if (ret)
@@ -1440,6 +1490,8 @@ struct kmscon_terminal *terminal_new(struct kmscon_session *session, unsigned in
 
 err_blink:
 	ev_eloop_rm_timer(term->blink_timer);
+err_frame:
+	ev_eloop_rm_timer(term->frame_timer);
 err_pointer:
 	input_unregister_pointer_cb(term->input, pointer_event, term);
 err_input:
