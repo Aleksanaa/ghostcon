@@ -117,6 +117,9 @@ static void print_help()
 		"\t                              pressed\n"
 		"\t    --sb-size <num>         [1000]\n"
 		"\t                              Size of the scrollback-buffer in lines\n"
+		"\t    --scrollbar             [off]\n"
+		"\t                              Show the scroll position in the last\n"
+		"\t                              column while viewing the scrollback\n"
 		"\t    --bell                  [off]\n"
 		"\t                              Enable bell forwarding to the VT\n"
 		"\t    --blink                 [on]\n"
@@ -199,6 +202,11 @@ static void print_help()
 		"\t                                      Select the used color palette.\n"
 		"\t                                      specify `custom' to use the \n"
 		"\t                                      following color options\n"
+		"\t    --minimum-contrast <ratio>      [1]\n"
+		"\t                                      Lowest contrast ratio between\n"
+		"\t                                      text and background, from 1 for\n"
+		"\t                                      no minimum to 21 for black on\n"
+		"\t                                      white. 4.5 meets WCAG AA\n"
 		"\t    --palette-black <color>         [  0,   0,   0]\n"
 		"\t                                      Black in custom palette\n"
 		"\t    --palette-red <color>           [205,   0,   0]\n"
@@ -236,7 +244,11 @@ static void print_help()
 		"\t                                      custom palette\n"
 		"\t    --palette-background <color>    [  0,   0,   0]\n"
 		"\t                                      Default background color in\n"
-		"\t                                      custom palette\n",
+		"\t                                      custom palette\n"
+		"\n"
+		"\t    A <color> is an `r,g,b' triple, a color name such as\n"
+		"\t    `cornflowerblue', a hex value such as `#1e1e2e' or an X11\n"
+		"\t    specification such as `rgb:1e/1e/2e'\n",
 		"kmscon");
 	/*
 	 * 80 char line:
@@ -488,6 +500,8 @@ static const struct conf_type conf_gpus = {
 /*
  * Color type
  * The color parser parses three comma-separated numbers into an RGB color.
+ * Everything else is passed to the VT layer, which accepts the color formats
+ * that libghostty-vt supports.
  */
 
 static void conf_default_color(struct conf_option *opt)
@@ -500,6 +514,17 @@ static int conf_parse_color(struct conf_option *opt, bool on, const char *arg)
 	int ret;
 	char **list = NULL;
 	unsigned int list_num, i, val;
+
+	/* Everything that is not the historic "r,g,b" triple is handed to the
+	 * VT layer, which understands color names and the usual hex and X11
+	 * notations. */
+	if (!strchr(arg, ',')) {
+		ret = kmscon_vte_parse_color(arg, opt->mem);
+		if (ret)
+			log_error("cannot parse color '%s' for '%s' config-option", arg,
+				  opt->long_name + 3);
+		return ret;
+	}
 
 	ret = shl_split_string(arg, &list, &list_num, ',', true);
 	if (ret) {
@@ -555,6 +580,45 @@ static const struct conf_type conf_color = {
 #define CONF_OPTION_COLOR(_long, _mem_palette, _offset)                                            \
 	CONF_OPTION(0, 0, _long, &conf_color, NULL, NULL, NULL, &(_mem_palette)[_offset],          \
 		    &def_palette[_offset])
+
+/*
+ * Contrast ratio: expects "mem" to point to a "double"
+ * The WCAG contrast ratio is a fractional value, so this cannot use the
+ * integer option types.
+ */
+
+static void conf_default_contrast(struct conf_option *opt)
+{
+	*(double *)opt->mem = *(const double *)opt->def;
+}
+
+static int conf_parse_contrast(struct conf_option *opt, bool on, const char *arg)
+{
+	char *end;
+	double val;
+
+	val = strtod(arg, &end);
+	if (end == arg || *end || val < 1.0 || val > 21.0) {
+		log_error("contrast ratio must be a value between 1 and 21");
+		return -EFAULT;
+	}
+
+	*(double *)opt->mem = val;
+	return 0;
+}
+
+static int conf_copy_contrast(struct conf_option *opt, const struct conf_option *src)
+{
+	*(double *)opt->mem = *(double *)src->mem;
+	return 0;
+}
+
+static const struct conf_type conf_contrast = {
+	.flags = CONF_HAS_ARG,
+	.set_default = conf_default_contrast,
+	.parse = conf_parse_contrast,
+	.copy = conf_copy_contrast,
+};
 
 /*
  * Custom Afterchecks
@@ -681,6 +745,8 @@ static struct conf_grab def_grab_rotate_cw =
 
 static struct conf_grab def_grab_rotate_ccw = CONF_SINGLE_GRAB(SHL_LOGO_MASK, XKB_KEY_minus);
 
+static double def_min_contrast = 1.0;
+
 static palette_t def_palette = {
 	[KMSCON_COLOR_BLACK] = {0, 0, 0},		   /* black */
 	[KMSCON_COLOR_RED] = {205, 0, 0},		   /* red */
@@ -749,6 +815,7 @@ int kmscon_conf_new(struct conf_ctx **out)
 		CONF_OPTION_BOOL(0, "reset-env", &conf->reset_env, true),
 		CONF_OPTION_BOOL(0, "backspace-delete", &conf->backspace_delete, true),
 		CONF_OPTION_UINT(0, "sb-size", &conf->sb_size, 1000),
+		CONF_OPTION_BOOL(0, "scrollbar", &conf->scrollbar, false),
 		CONF_OPTION_BOOL(0, "bell", &conf->bell, false),
 		CONF_OPTION_BOOL(0, "blink", &conf->blink, true),
 
@@ -804,6 +871,8 @@ int kmscon_conf_new(struct conf_ctx **out)
 
 		/* Palette Options */
 		CONF_OPTION_STRING(0, "palette", &conf->palette, NULL),
+		CONF_OPTION(0, 0, "minimum-contrast", &conf_contrast, NULL, NULL, NULL,
+			    &conf->min_contrast, &def_min_contrast),
 		CONF_OPTION_COLOR("palette-black", conf->custom_palette, KMSCON_COLOR_BLACK),
 		CONF_OPTION_COLOR("palette-red", conf->custom_palette, KMSCON_COLOR_RED),
 		CONF_OPTION_COLOR("palette-green", conf->custom_palette, KMSCON_COLOR_GREEN),

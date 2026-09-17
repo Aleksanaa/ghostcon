@@ -448,6 +448,152 @@ static void test_effects(void)
 	kmscon_vte_free(vte);
 }
 
+static void test_focus(void)
+{
+	struct kmscon_vte *vte;
+	struct sink sink;
+
+	vte = new_vte(&sink);
+
+	/* without focus events enabled nothing is reported */
+	kmscon_vte_set_focus(vte, true);
+	kmscon_vte_set_focus(vte, false);
+	assert(!sink.len);
+
+	input_str(vte, "\033[?1004h");
+	kmscon_vte_set_focus(vte, true);
+	assert(!strcmp(sink.buf, "\033[I"));
+
+	/* the same state twice is not reported again */
+	reset_sink(&sink);
+	kmscon_vte_set_focus(vte, true);
+	assert(!sink.len);
+
+	kmscon_vte_set_focus(vte, false);
+	assert(!strcmp(sink.buf, "\033[O"));
+
+	reset_sink(&sink);
+	input_str(vte, "\033[?1004l");
+	kmscon_vte_set_focus(vte, true);
+	assert(!sink.len);
+
+	kmscon_vte_free(vte);
+}
+
+static void test_color_scheme(void)
+{
+	struct kmscon_vte *vte;
+	struct sink sink;
+
+	vte = new_vte(&sink);
+
+	/* the legacy palette has a black background, so we are dark */
+	input_str(vte, "\033[?996n");
+	assert(!strcmp(sink.buf, "\033[?997;1n"));
+
+	reset_sink(&sink);
+	assert(!kmscon_vte_set_palette(vte, "solarized-white", NULL));
+	input_str(vte, "\033[?996n");
+	assert(!strcmp(sink.buf, "\033[?997;2n"));
+
+	/* with mode 2031 set a palette change is reported on its own */
+	reset_sink(&sink);
+	input_str(vte, "\033[?2031h");
+	assert(!kmscon_vte_set_palette(vte, "legacy", NULL));
+	assert(!strcmp(sink.buf, "\033[?997;1n"));
+
+	kmscon_vte_free(vte);
+}
+
+static void test_min_contrast(void)
+{
+	struct kmscon_vte_screen screen;
+	struct kmscon_vte *vte;
+	struct sink sink;
+
+	vte = new_vte(&sink);
+
+	/* black on black is unreadable, but is left alone by default */
+	input_str(vte, "\033[30;40mA");
+	assert(!kmscon_vte_draw(vte, &screen));
+	assert(cell_at(&screen, 0, 0)->fg.r == 0);
+	assert(cell_at(&screen, 0, 0)->bg.r == 0);
+
+	kmscon_vte_set_min_contrast(vte, 4.5);
+	assert(!kmscon_vte_draw(vte, &screen));
+	assert(cell_at(&screen, 0, 0)->fg.r == 0xff);
+	assert(cell_at(&screen, 0, 0)->bg.r == 0);
+
+	/* white on black already has the highest contrast there is */
+	input_str(vte, "\033[37;40mB");
+	assert(!kmscon_vte_draw(vte, &screen));
+	assert(cell_at(&screen, 1, 0)->fg.r == 229);
+
+	/* on a light background the text is pushed to black instead */
+	input_str(vte, "\033[30;47mC");
+	assert(!kmscon_vte_draw(vte, &screen));
+	assert(cell_at(&screen, 2, 0)->fg.r == 0);
+	assert(cell_at(&screen, 2, 0)->bg.r == 229);
+
+	kmscon_vte_free(vte);
+}
+
+static void test_parse_color(void)
+{
+	uint8_t color[3];
+
+	assert(!kmscon_vte_parse_color("#1e1e2e", color));
+	assert(color[0] == 0x1e && color[1] == 0x1e && color[2] == 0x2e);
+
+	assert(!kmscon_vte_parse_color("cornflowerblue", color));
+	assert(color[0] == 100 && color[1] == 149 && color[2] == 237);
+
+	assert(!kmscon_vte_parse_color("rgb:12/34/56", color));
+	assert(color[0] == 0x12 && color[1] == 0x34 && color[2] == 0x56);
+
+	assert(kmscon_vte_parse_color("not-a-color", color));
+	assert(kmscon_vte_parse_color("", color));
+
+	assert(kmscon_vte_parse_color(NULL, color));
+	assert(kmscon_vte_parse_color("#000000", NULL));
+}
+
+static void test_scrollbar(void)
+{
+	struct kmscon_vte_scrollbar sb;
+	struct kmscon_vte_screen screen;
+	struct kmscon_vte *vte;
+	struct sink sink;
+
+	vte = new_vte(&sink);
+	input_str(vte, "1\r\n2\r\n3\r\n4\r\n5\r\n6\r\n7");
+
+	kmscon_vte_get_scrollbar(vte, &sb);
+	assert(sb.len == 5);
+	assert(sb.total == 7);
+	assert(sb.offset == 2);
+
+	/* the last column is only taken over once it is enabled */
+	kmscon_vte_sb_up(vte, 2);
+	assert(!kmscon_vte_draw(vte, &screen));
+	assert(cell_at(&screen, 19, 0)->ch == 0);
+
+	kmscon_vte_set_scrollbar(vte, true);
+	assert(!kmscon_vte_draw(vte, &screen));
+	assert(cell_at(&screen, 19, 0)->ch == 0x2588);
+	assert(cell_at(&screen, 19, 4)->ch == 0x2502);
+
+	kmscon_vte_get_scrollbar(vte, &sb);
+	assert(sb.offset == 0);
+
+	/* back at the bottom the column belongs to the terminal again */
+	kmscon_vte_sb_reset(vte);
+	assert(!kmscon_vte_draw(vte, &screen));
+	assert(cell_at(&screen, 19, 0)->ch == 0);
+
+	kmscon_vte_free(vte);
+}
+
 static void test_reset(void)
 {
 	struct kmscon_vte_screen screen;
@@ -477,6 +623,11 @@ int main(void)
 	test_mouse();
 	test_paste();
 	test_effects();
+	test_focus();
+	test_color_scheme();
+	test_min_contrast();
+	test_parse_color();
+	test_scrollbar();
 	test_reset();
 
 	printf("vte tests passed\n");

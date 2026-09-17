@@ -29,6 +29,7 @@
       term = "kmscon";
       palette = "solarized-black";
       sb-size = 4096;
+      scrollbar = true;
       xkb-layout = "us";
     };
   };

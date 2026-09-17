@@ -103,6 +103,8 @@ struct kmscon_conf_t {
 	bool backspace_delete;
 	/* terminal scroll-back buffer size */
 	unsigned int sb_size;
+	/* show the scroll position while looking at the scroll-back buffer */
+	bool scrollbar;
 	/* enable bell forwarding */
 	bool bell;
 	/* enable cursor and text blinking */
@@ -191,6 +193,8 @@ struct kmscon_conf_t {
 	char *palette;
 	/* custom palette */
 	palette_t custom_palette;
+	/* lowest contrast ratio between text and background, 1 disables it */
+	double min_contrast;
 };
 
 int kmscon_conf_new(struct conf_ctx **out);

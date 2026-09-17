@@ -233,9 +233,28 @@ font-name=Ubuntu Mono
       </varlistentry>
 
       <varlistentry>
+        <term><option>minimum-contrast</option></term>
+        <listitem>
+          <para>Lowest WCAG contrast ratio between the text and the background
+                of a cell, from 1, which keeps the colors as they are, to 21,
+                which is the contrast of black on white. A value of 4.5 meets
+                the WCAG AA recommendation. (default: 1)</para>
+        </listitem>
+      </varlistentry>
+
+      <varlistentry>
         <term><option>sb-size</option></term>
         <listitem>
           <para>Size of the scrollback-buffer in lines. (default: 1000)</para>
+        </listitem>
+      </varlistentry>
+
+      <varlistentry>
+        <term><option>scrollbar</option></term>
+        <listitem>
+          <para>Show the position inside the scrollback buffer in the last
+                column. The column is only taken over while the scrollback is
+                displayed. (default: off)</para>
         </listitem>
       </varlistentry>
 

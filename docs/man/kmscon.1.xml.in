@@ -291,6 +291,16 @@
       </varlistentry>
 
       <varlistentry>
+        <term><option>--scrollbar</option></term>
+        <listitem>
+          <para>Show the position inside the scrollback buffer in the last
+                column. The column is only taken over while the scrollback is
+                displayed, a terminal that is scrolled to the bottom keeps all
+                of its columns. (default: off)</para>
+        </listitem>
+      </varlistentry>
+
+      <varlistentry>
         <term><option>--bell</option></term>
         <listitem>
           <para>Enable bell forwarding to the VT. When enabled, the BEL character
@@ -684,9 +694,26 @@
         </listitem>
       </varlistentry>
 
+      <varlistentry>
+        <term><option>--minimum-contrast {ratio}</option></term>
+        <listitem>
+          <para>Force the foreground color of a cell far enough away from its
+                background for the text to stay readable, no matter which
+                colors the application picked. The
+                <replaceable>ratio</replaceable> is a WCAG contrast ratio
+                between 1, which keeps the colors as they are, and 21, which
+                is the contrast of black on white. A value of 4.5 meets the
+                WCAG AA recommendation. (default: 1)</para>
+        </listitem>
+      </varlistentry>
+
       <para>In the following options, <replaceable>colors</replaceable> are
-            specified in RGB color value, written in three comma-separated
-            integers between 0 and 255 inclusive.</para>
+            specified either in RGB color value, written in three
+            comma-separated integers between 0 and 255 inclusive, as an X11
+            color name such as <literal>cornflowerblue</literal>, as a hex
+            value such as <literal>#1e1e2e</literal>, or in the
+            <literal>rgb:1e/1e/2e</literal> and
+            <literal>rgbi:0.1/0.1/0.2</literal> notations.</para>
 
       <varlistentry>
         <term><option>--palette-black {color}</option></term>

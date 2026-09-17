@@ -103,6 +103,13 @@ enum kmscon_cursor_shape {
 	KMSCON_CURSOR_BLOCK_HOLLOW,
 };
 
+/* Position of the viewport inside the scrollback */
+struct kmscon_vte_scrollbar {
+	uint64_t total;	 /* size of the scrollable area in rows */
+	uint64_t offset; /* first visible row inside that area */
+	uint64_t len;	 /* number of visible rows */
+};
+
 /* Snapshot of the visible screen, valid until the next kmscon_vte_draw() */
 struct kmscon_vte_screen {
 	const struct kmscon_cell *cells;
@@ -140,8 +147,21 @@ void kmscon_vte_set_mouse_mode_cb(struct kmscon_vte *vte, kmscon_vte_mouse_mode_
 
 int kmscon_vte_set_palette(struct kmscon_vte *vte, const char *name, const uint8_t (*custom)[3]);
 void kmscon_vte_set_backspace_sends_delete(struct kmscon_vte *vte, bool set);
+void kmscon_vte_set_min_contrast(struct kmscon_vte *vte, double ratio);
+void kmscon_vte_set_scrollbar(struct kmscon_vte *vte, bool set);
+
+/* Parse a color in any of the formats that libghostty-vt understands, that is
+ * X11 color names, hex colors with an optional leading '#', rgb:<r>/<g>/<b>
+ * and rgbi:<r>/<g>/<b>. */
+int kmscon_vte_parse_color(const char *value, uint8_t out[3]);
 
 void kmscon_vte_input(struct kmscon_vte *vte, const char *u8, size_t len);
+
+/* Report focus changes to the application if it enabled focus events */
+void kmscon_vte_set_focus(struct kmscon_vte *vte, bool focused);
+
+/* Release the memory of scrollback that is not currently displayed */
+void kmscon_vte_compress_scrollback(struct kmscon_vte *vte);
 void kmscon_vte_hard_reset(struct kmscon_vte *vte);
 void kmscon_vte_paste(struct kmscon_vte *vte, const char *u8, size_t len);
 
@@ -152,6 +172,7 @@ unsigned int kmscon_vte_get_rows(struct kmscon_vte *vte);
 void kmscon_vte_get_def_attr(struct kmscon_vte *vte, struct kmscon_screen_attr *out);
 
 int kmscon_vte_draw(struct kmscon_vte *vte, struct kmscon_vte_screen *out);
+void kmscon_vte_get_scrollbar(struct kmscon_vte *vte, struct kmscon_vte_scrollbar *out);
 
 void kmscon_vte_sb_up(struct kmscon_vte *vte, unsigned int num);
 void kmscon_vte_sb_down(struct kmscon_vte *vte, unsigned int num);

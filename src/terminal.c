@@ -1173,6 +1173,7 @@ void terminal_activate(struct kmscon_terminal *term)
 	else
 		kmscon_asciinema_resume(term->asciinema);
 
+	kmscon_vte_set_focus(term->vte, true);
 	terminal_refresh_displays(term);
 }
 
@@ -1185,6 +1186,11 @@ void terminal_deactivate(struct kmscon_terminal *term)
 		ev_timer_disable(term->blink_cursor);
 	}
 	kmscon_asciinema_pause(term->asciinema);
+	kmscon_vte_set_focus(term->vte, false);
+
+	/* Nothing is drawn while we are in the background, so this is a good
+	 * time to give the memory of the scrollback back to the system. */
+	kmscon_vte_compress_scrollback(term->vte);
 }
 
 void terminal_destroy(struct kmscon_terminal *term)
@@ -1283,6 +1289,8 @@ struct kmscon_terminal *terminal_new(struct kmscon_session *session, unsigned in
 	kmscon_vte_set_bell_cb(term->vte, bell_event);
 	kmscon_vte_set_mouse_mode_cb(term->vte, mouse_mode_event);
 	kmscon_vte_set_backspace_sends_delete(term->vte, term->conf->backspace_delete);
+	kmscon_vte_set_min_contrast(term->vte, term->conf->min_contrast);
+	kmscon_vte_set_scrollbar(term->vte, term->conf->scrollbar);
 
 	ret = kmscon_vte_set_palette(term->vte, term->conf->palette, term->conf->custom_palette);
 	if (ret)

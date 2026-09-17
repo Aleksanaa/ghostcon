@@ -77,6 +77,10 @@ struct kmscon_vte {
 	bool backspace_sends_delete;
 	bool mouse_tracking;
 	bool any_button_pressed;
+	bool focused;
+	bool scrollbar;
+	bool vt_error_logged;
+	double min_contrast;
 
 	enum osc_state osc_state;
 	char osc_buf[OSC_MAX];
@@ -355,6 +359,25 @@ static bool size_cb(GhosttyTerminal term, void *data, GhosttySizeReportSize *out
 	return true;
 }
 
+/* The console has no light or dark mode of its own, so we derive the scheme
+ * from the background of the configured palette. */
+static GhosttyColorScheme get_color_scheme(struct kmscon_vte *vte)
+{
+	GhosttyColorRgb bg = {0, 0, 0};
+
+	ghostty_terminal_get(vte->term, GHOSTTY_TERMINAL_DATA_COLOR_BACKGROUND, &bg);
+	return ghostty_color_perceived_luminance(&bg) < 0.5 ? GHOSTTY_COLOR_SCHEME_DARK
+							    : GHOSTTY_COLOR_SCHEME_LIGHT;
+}
+
+static bool color_scheme_cb(GhosttyTerminal term, void *data, GhosttyColorScheme *out)
+{
+	struct kmscon_vte *vte = data;
+
+	*out = get_color_scheme(vte);
+	return true;
+}
+
 /*
  * kmscon supports a few non-standard OSC commands ("setBackground" and
  * "setForeground") which libghostty-vt does not know about. Sniff the byte
@@ -418,6 +441,29 @@ static void osc_sniff(struct kmscon_vte *vte, const char *u8, size_t len)
 	}
 }
 
+/* Send @buf to the application, used for the reports that we generate
+ * ourselves instead of letting the terminal answer a query. */
+static void write_report(struct kmscon_vte *vte, const char *buf, size_t len)
+{
+	if (len && vte->write_cb)
+		vte->write_cb(buf, len, vte->data);
+}
+
+static void report_color_scheme(struct kmscon_vte *vte)
+{
+	char buf[ENCODE_MAX];
+	size_t written = 0;
+	bool enabled = false;
+
+	ghostty_terminal_mode_get(vte->term, GHOSTTY_MODE_COLOR_SCHEME_REPORT, &enabled);
+	if (!enabled)
+		return;
+
+	if (ghostty_color_scheme_report_encode(get_color_scheme(vte), buf, sizeof(buf), &written) ==
+	    GHOSTTY_SUCCESS)
+		write_report(vte, buf, written);
+}
+
 static void update_mouse_mode(struct kmscon_vte *vte)
 {
 	bool tracking = false;
@@ -450,6 +496,7 @@ int kmscon_vte_new(struct kmscon_vte **out, unsigned int cols, unsigned int rows
 	vte->rows_num = rows;
 	vte->cell_width = 1;
 	vte->cell_height = 1;
+	vte->min_contrast = 1.0;
 
 	opts = (GhosttyTerminalOptions){
 		.cols = cols,
@@ -470,6 +517,8 @@ int kmscon_vte_new(struct kmscon_vte **out, unsigned int cols, unsigned int rows
 	ghostty_terminal_set(vte->term, GHOSTTY_TERMINAL_OPT_SIZE, (const void *)size_cb);
 	ghostty_terminal_set(vte->term, GHOSTTY_TERMINAL_OPT_DEVICE_ATTRIBUTES,
 			     (const void *)device_attributes_cb);
+	ghostty_terminal_set(vte->term, GHOSTTY_TERMINAL_OPT_COLOR_SCHEME,
+			     (const void *)color_scheme_cb);
 
 	if (ghostty_render_state_new(NULL, &vte->render) != GHOSTTY_SUCCESS) {
 		ret = -ENOMEM;
@@ -599,6 +648,24 @@ int kmscon_vte_set_palette(struct kmscon_vte *vte, const char *name, const uint8
 	ghostty_terminal_set(vte->term, GHOSTTY_TERMINAL_OPT_COLOR_PALETTE, palette);
 	ghostty_terminal_set(vte->term, GHOSTTY_TERMINAL_OPT_COLOR_FOREGROUND, &fg);
 	ghostty_terminal_set(vte->term, GHOSTTY_TERMINAL_OPT_COLOR_BACKGROUND, &bg);
+
+	report_color_scheme(vte);
+	return 0;
+}
+
+int kmscon_vte_parse_color(const char *value, uint8_t out[3])
+{
+	GhosttyColorRgb rgb;
+
+	if (!value || !out)
+		return -EINVAL;
+
+	if (ghostty_color_parse(value, strlen(value), &rgb) != GHOSTTY_SUCCESS)
+		return -EINVAL;
+
+	out[0] = rgb.r;
+	out[1] = rgb.g;
+	out[2] = rgb.b;
 	return 0;
 }
 
@@ -606,6 +673,25 @@ void kmscon_vte_set_backspace_sends_delete(struct kmscon_vte *vte, bool set)
 {
 	if (vte)
 		vte->backspace_sends_delete = set;
+}
+
+void kmscon_vte_set_min_contrast(struct kmscon_vte *vte, double ratio)
+{
+	if (!vte)
+		return;
+
+	/* WCAG contrast ratios run from 1.0, that is no contrast at all, to
+	 * 21.0 for black on white. Anything at or below 1.0 disables this. */
+	if (ratio > 21.0)
+		ratio = 21.0;
+
+	vte->min_contrast = ratio;
+}
+
+void kmscon_vte_set_scrollbar(struct kmscon_vte *vte, bool set)
+{
+	if (vte)
+		vte->scrollbar = set;
 }
 
 void kmscon_vte_input(struct kmscon_vte *vte, const char *u8, size_t len)
@@ -616,6 +702,51 @@ void kmscon_vte_input(struct kmscon_vte *vte, const char *u8, size_t len)
 	osc_sniff(vte, u8, len);
 	ghostty_terminal_vt_write(vte->term, (const uint8_t *)u8, len);
 	update_mouse_mode(vte);
+
+	if (!vte->vt_error_logged) {
+		bool error = false;
+
+		ghostty_terminal_get(vte->term, GHOSTTY_TERMINAL_DATA_VT_PROCESSING_ERROR, &error);
+		if (error) {
+			log_warning("VT processing hit an error, some output may be missing");
+			vte->vt_error_logged = true;
+		}
+	}
+}
+
+void kmscon_vte_set_focus(struct kmscon_vte *vte, bool focused)
+{
+	char buf[ENCODE_MAX];
+	size_t written = 0;
+	bool enabled = false;
+
+	if (!vte || vte->focused == focused)
+		return;
+
+	vte->focused = focused;
+
+	ghostty_terminal_mode_get(vte->term, GHOSTTY_MODE_FOCUS_EVENT, &enabled);
+	if (!enabled)
+		return;
+
+	if (ghostty_focus_encode(focused ? GHOSTTY_FOCUS_GAINED : GHOSTTY_FOCUS_LOST, buf,
+				 sizeof(buf), &written) == GHOSTTY_SUCCESS)
+		write_report(vte, buf, written);
+}
+
+void kmscon_vte_compress_scrollback(struct kmscon_vte *vte)
+{
+	GhosttyTerminalCompressionResult res;
+
+	if (!vte)
+		return;
+
+	if (ghostty_terminal_compress(vte->term, GHOSTTY_TERMINAL_COMPRESSION_MODE_FULL, &res) !=
+	    GHOSTTY_SUCCESS)
+		return;
+
+	if (res == GHOSTTY_TERMINAL_COMPRESSION_RESULT_UNSUPPORTED)
+		log_debug("scrollback compression is not supported here");
 }
 
 void kmscon_vte_hard_reset(struct kmscon_vte *vte)
@@ -758,6 +889,25 @@ static void color_dim(struct kmscon_color *out, const struct kmscon_color *fg,
 	out->b = bg->b / 2 + fg->b / 2;
 }
 
+/* Force the foreground far enough away from the background for the text to
+ * stay readable, no matter which colors the application picked. */
+static void apply_min_contrast(struct kmscon_vte *vte, struct kmscon_cell *cell)
+{
+	GhosttyColorRgb fg = {cell->fg.r, cell->fg.g, cell->fg.b};
+	GhosttyColorRgb bg = {cell->bg.r, cell->bg.g, cell->bg.b};
+
+	if (ghostty_color_contrast(&fg, &bg) >= vte->min_contrast)
+		return;
+
+	/* Black and white are the extremes of the contrast ratio, so picking
+	 * the one that is further away from the background gives us the best
+	 * result that is still achievable. */
+	if (ghostty_color_perceived_luminance(&bg) < 0.5)
+		cell->fg = (struct kmscon_color){0xff, 0xff, 0xff};
+	else
+		cell->fg = (struct kmscon_color){0, 0, 0};
+}
+
 static enum kmscon_cursor_shape to_cursor_shape(GhosttyRenderStateCursorVisualStyle style)
 {
 	switch (style) {
@@ -822,8 +972,52 @@ static void draw_cell(struct kmscon_vte *vte, GhosttyRenderStateRowCells cells,
 
 	if (style.faint)
 		color_dim(&out->fg, &out->fg, &out->bg);
+	if (vte->min_contrast > 1.0 && out->ch)
+		apply_min_contrast(vte, out);
 	if (style.invisible)
 		out->fg = out->bg;
+}
+
+#define SCROLLBAR_THUMB 0x2588	/* FULL BLOCK */
+#define SCROLLBAR_TROUGH 0x2502 /* BOX DRAWINGS LIGHT VERTICAL */
+
+/* Replace the last column with a scroll position indicator. This is only done
+ * while the user is looking at the scrollback, so a terminal that is scrolled
+ * to the bottom keeps all of its columns. */
+static void draw_scrollbar(struct kmscon_vte *vte, const GhosttyRenderStateColors *colors,
+			   unsigned int cols, unsigned int rows)
+{
+	struct kmscon_vte_scrollbar sb;
+	uint64_t start, len;
+	unsigned int y;
+	bool active = true;
+
+	if (cols < 2 || !rows)
+		return;
+
+	ghostty_terminal_get(vte->term, GHOSTTY_TERMINAL_DATA_VIEWPORT_ACTIVE, &active);
+	if (active)
+		return;
+
+	kmscon_vte_get_scrollbar(vte, &sb);
+	if (!sb.total || sb.len >= sb.total)
+		return;
+
+	len = (sb.len * rows + sb.total - 1) / sb.total;
+	if (!len)
+		len = 1;
+	start = sb.offset * rows / sb.total;
+	if (start + len > rows)
+		start = rows - len;
+
+	for (y = 0; y < rows; ++y) {
+		struct kmscon_cell *cell = &vte->cells[y * cols + cols - 1];
+
+		memset(cell, 0, sizeof(*cell));
+		cell->fg = to_color(colors->foreground);
+		cell->bg = to_color(colors->background);
+		cell->ch = (y >= start && y < start + len) ? SCROLLBAR_THUMB : SCROLLBAR_TROUGH;
+	}
 }
 
 int kmscon_vte_draw(struct kmscon_vte *vte, struct kmscon_vte_screen *out)
@@ -875,6 +1069,9 @@ int kmscon_vte_draw(struct kmscon_vte *vte, struct kmscon_vte_screen *out)
 		}
 	}
 
+	if (vte->scrollbar)
+		draw_scrollbar(vte, &colors, cols, rows);
+
 	ghostty_render_state_get(vte->render, GHOSTTY_RENDER_STATE_DATA_CURSOR_VISIBLE,
 				 &cursor_visible);
 	ghostty_render_state_get(vte->render, GHOSTTY_RENDER_STATE_DATA_CURSOR_VIEWPORT_HAS_VALUE,
@@ -900,6 +1097,19 @@ int kmscon_vte_draw(struct kmscon_vte *vte, struct kmscon_vte_screen *out)
 	out->cursor_blinks = cursor_blinking;
 	out->cursor_shape = to_cursor_shape(cursor_style);
 	return 0;
+}
+
+void kmscon_vte_get_scrollbar(struct kmscon_vte *vte, struct kmscon_vte_scrollbar *out)
+{
+	GhosttyTerminalScrollbar sb = {0};
+
+	if (!vte || !out)
+		return;
+
+	ghostty_terminal_get(vte->term, GHOSTTY_TERMINAL_DATA_SCROLLBAR, &sb);
+	out->total = sb.total;
+	out->offset = sb.offset;
+	out->len = sb.len;
 }
 
 /* scrollback */
