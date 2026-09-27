@@ -1499,6 +1499,7 @@ struct kmscon_terminal *terminal_new(struct kmscon_session *session, unsigned in
 
 	strncpy(term->font_attr.name, term->conf->font_name, KMSCON_FONT_MAX_NAME - 1);
 	term->font_attr.height = term->conf->font_size;
+	term->font_attr.synth_bold = term->conf->font_bold_synthesize;
 
 	ret = kmscon_vte_new(&term->vte, 80, 24, term->conf->sb_size, term);
 	if (ret)

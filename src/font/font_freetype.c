@@ -373,6 +373,30 @@ underline:
 		draw_underline(buf, face);
 }
 
+/* Synthesising bold thickens the regular face, so the bold one stays unused */
+static bool use_bold_face(const struct kmscon_font_attr *attr)
+{
+	return attr->bold && !attr->synth_bold;
+}
+
+/*
+ * Terminus and friends ship a bold face that is byte-identical to the regular
+ * one at small pixel sizes, because six pixels leave no room to thicken a stem.
+ * Smearing each row one pixel to the right is what the psf backend does, and it
+ * is the only way to tell bold apart on such a font.
+ */
+static void embolden(struct video_buffer *buf)
+{
+	unsigned int x, y;
+	uint8_t *row;
+
+	for (y = 0; y < buf->height; y++) {
+		row = buf->data + y * buf->width;
+		for (x = buf->width - 1; x > 0; x--)
+			row[x] |= row[x - 1];
+	}
+}
+
 static struct kmscon_glyph *render_glyph(FT_Face face, FT_UInt index, uint32_t ch,
 					 const struct kmscon_font_attr *attr)
 {
@@ -410,6 +434,9 @@ static struct kmscon_glyph *render_glyph(FT_Face face, FT_UInt index, uint32_t c
 			  attr->underline);
 	else
 		copy_glyph(&glyph->buf, face, &face->glyph->bitmap, attr->underline);
+
+	if (attr->bold && attr->synth_bold)
+		embolden(&glyph->buf);
 
 	if (attr->cursor_bar)
 		kmscon_glyph_draw_vbar(&glyph->buf, attr->width);
@@ -485,7 +512,7 @@ static int get_fallback(uint32_t ch, struct ft_font *ftf)
 static bool kmscon_font_freetype_has_glyph(struct kmscon_font *font, uint32_t ch)
 {
 	struct ft_data *ftd = font->data;
-	struct ft_font *ftfont = font->attr.bold ? &ftd->bold : &ftd->regular;
+	struct ft_font *ftfont = use_bold_face(&font->attr) ? &ftd->bold : &ftd->regular;
 	FT_UInt glyph_index = FT_Get_Char_Index(ftfont->face, ch);
 
 	if (glyph_index)
@@ -497,7 +524,7 @@ static bool kmscon_font_freetype_has_glyph(struct kmscon_font *font, uint32_t ch
 static struct kmscon_glyph *kmscon_font_freetype_render(struct kmscon_font *font, uint32_t ch)
 {
 	struct ft_data *ftd = font->data;
-	struct ft_font *ftfont = font->attr.bold ? &ftd->bold : &ftd->regular;
+	struct ft_font *ftfont = use_bold_face(&font->attr) ? &ftd->bold : &ftd->regular;
 	FT_UInt glyph_index = FT_Get_Char_Index(ftfont->face, ch);
 	int fallback_index;
 

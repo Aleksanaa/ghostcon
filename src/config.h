@@ -199,6 +199,9 @@ struct kmscon_conf_t {
 	unsigned int font_size;
 	/* font name */
 	char *font_name;
+	/* Thicken bold by smearing, for fonts whose bold face is not actually
+	 * bolder at small pixel sizes */
+	bool font_bold_synthesize;
 
 	/* Palette Options */
 	/* color palette */

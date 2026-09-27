@@ -53,6 +53,8 @@ struct kmscon_font_ops;
 struct kmscon_font_attr {
 	char name[KMSCON_FONT_MAX_NAME];
 	bool bold;
+	/* draw bold by thickening the regular face rather than loading a bold one */
+	bool synth_bold;
 	bool italic;
 	bool underline;
 	bool cursor_bar;

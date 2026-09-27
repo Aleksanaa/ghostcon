@@ -46,6 +46,9 @@
 #font-size=18
 ## font-name is only for freetype/pango. For psf, it's the path of the psf or psf.gz file. Unifont and 8x16 uses their own bitmap.
 #font-name=Hack Nerd Font
+## Draw bold by thickening the regular face. Useful for bitmap fonts whose bold
+## face is identical to the regular one at small sizes, such as Terminus at 6x12.
+#font-bold-synthesize
 
 ### Input Options ###
 ## Keyboard

@@ -213,6 +213,9 @@ static void print_help()
 		"\t                              Font size in pixels\n"
 		"\t    --font-name <name>      [monospace]\n"
 		"\t                              Font name\n"
+		"\t    --font-bold-synthesize  [off]\n"
+		"\t                              Draw bold by thickening the regular\n"
+		"\t                              face instead of using the bold one\n"
 		"\n"
 		"Palette Options:\n"
 		"\t    --palette <name>                [default]\n"
@@ -899,6 +902,7 @@ int kmscon_conf_new(struct conf_ctx **out)
 		CONF_OPTION_STRING(0, "font-engine", &conf->font_engine, NULL),
 		CONF_OPTION_UINT(0, "font-size", &conf->font_size, 16),
 		CONF_OPTION_STRING(0, "font-name", &conf->font_name, "monospace"),
+		CONF_OPTION_BOOL(0, "font-bold-synthesize", &conf->font_bold_synthesize, false),
 
 		/* Palette Options */
 		CONF_OPTION_STRING(0, "palette", &conf->palette, NULL),
