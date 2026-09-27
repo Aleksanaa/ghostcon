@@ -1103,23 +1103,21 @@ static void draw_cell(struct kmscon_vte *vte, bool selected, struct kmscon_cell 
 		out->ch = vte->graphemes[0];
 	}
 
-	/* A cell can only carry a style or a color of its own if it is styled,
-	 * so this one query saves three for every plain cell on the screen. */
+	/* Only the style is worth gating. A cell carries its colours through a
+	 * content tag as well, with no styling at all, which is how a cell that
+	 * was erased under a background colour arrives here. */
 	ghostty_render_state_row_cells_get(cells, GHOSTTY_RENDER_STATE_ROW_CELLS_DATA_HAS_STYLING,
 					   &has_styling);
-	if (has_styling) {
+	if (has_styling)
 		ghostty_render_state_row_cells_get(cells, GHOSTTY_RENDER_STATE_ROW_CELLS_DATA_STYLE,
 						   &style);
 
-		if (ghostty_render_state_row_cells_get(cells,
-						       GHOSTTY_RENDER_STATE_ROW_CELLS_DATA_FG_COLOR,
-						       &rgb) == GHOSTTY_SUCCESS)
-			out->fg = to_color(rgb);
-		if (ghostty_render_state_row_cells_get(cells,
-						       GHOSTTY_RENDER_STATE_ROW_CELLS_DATA_BG_COLOR,
-						       &rgb) == GHOSTTY_SUCCESS)
-			out->bg = to_color(rgb);
-	}
+	if (ghostty_render_state_row_cells_get(cells, GHOSTTY_RENDER_STATE_ROW_CELLS_DATA_FG_COLOR,
+					       &rgb) == GHOSTTY_SUCCESS)
+		out->fg = to_color(rgb);
+	if (ghostty_render_state_row_cells_get(cells, GHOSTTY_RENDER_STATE_ROW_CELLS_DATA_BG_COLOR,
+					       &rgb) == GHOSTTY_SUCCESS)
+		out->bg = to_color(rgb);
 
 	out->attr.bold = style.bold;
 	out->attr.italic = style.italic;
