@@ -401,6 +401,16 @@ static bool size_cb(GhosttyTerminal term, void *data, GhosttySizeReportSize *out
 	return true;
 }
 
+static bool get_mode(struct kmscon_vte *vte, GhosttyMode mode)
+{
+	GhosttyTerminalModeConfig cfg = { .mode = mode };
+
+	if (ghostty_terminal_get(vte->term, GHOSTTY_TERMINAL_DATA_MODE, &cfg) != GHOSTTY_SUCCESS)
+		return false;
+
+	return cfg.value;
+}
+
 /* The console has no light or dark mode of its own, so we derive the scheme
  * from the background of the configured palette. */
 static GhosttyColorScheme get_color_scheme(struct kmscon_vte *vte)
@@ -535,10 +545,8 @@ static void report_color_scheme(struct kmscon_vte *vte)
 {
 	char buf[ENCODE_MAX];
 	size_t written = 0;
-	bool enabled = false;
 
-	ghostty_terminal_mode_get(vte->term, GHOSTTY_MODE_COLOR_SCHEME_REPORT, &enabled);
-	if (!enabled)
+	if (!get_mode(vte, GHOSTTY_MODE_COLOR_SCHEME_REPORT))
 		return;
 
 	if (ghostty_color_scheme_report_encode(get_color_scheme(vte), buf, sizeof(buf), &written) ==
@@ -563,7 +571,7 @@ int kmscon_vte_new(struct kmscon_vte **out, unsigned int cols, unsigned int rows
 		   unsigned int max_scrollback, void *data)
 {
 	struct kmscon_vte *vte;
-	GhosttyTerminalOptions opts;
+	size_t scrollback = max_scrollback;
 	int ret;
 
 	if (!out || !cols || !rows)
@@ -580,16 +588,13 @@ int kmscon_vte_new(struct kmscon_vte **out, unsigned int cols, unsigned int rows
 	vte->cell_height = 1;
 	vte->min_contrast = 1.0;
 
-	opts = (GhosttyTerminalOptions){
-		.cols = cols,
-		.rows = rows,
-		.max_scrollback = max_scrollback,
-	};
-	if (ghostty_terminal_new(NULL, &vte->term, opts) != GHOSTTY_SUCCESS) {
+	if (ghostty_terminal_new(NULL, &vte->term, cols, rows) != GHOSTTY_SUCCESS) {
 		log_error("cannot create terminal");
 		ret = -ENOMEM;
 		goto err_free;
 	}
+
+	ghostty_terminal_set(vte->term, GHOSTTY_TERMINAL_OPT_SCROLLBACK_MAX_LINES, &scrollback);
 
 	ghostty_terminal_set(vte->term, GHOSTTY_TERMINAL_OPT_USERDATA, vte);
 	ghostty_terminal_set(vte->term, GHOSTTY_TERMINAL_OPT_WRITE_PTY, (const void *)write_pty_cb);
@@ -866,15 +871,13 @@ void kmscon_vte_set_focus(struct kmscon_vte *vte, bool focused)
 {
 	char buf[ENCODE_MAX];
 	size_t written = 0;
-	bool enabled = false;
 
 	if (!vte || vte->focused == focused)
 		return;
 
 	vte->focused = focused;
 
-	ghostty_terminal_mode_get(vte->term, GHOSTTY_MODE_FOCUS_EVENT, &enabled);
-	if (!enabled)
+	if (!get_mode(vte, GHOSTTY_MODE_FOCUS_EVENT))
 		return;
 
 	if (ghostty_focus_encode(focused ? GHOSTTY_FOCUS_GAINED : GHOSTTY_FOCUS_LOST, buf,
@@ -923,7 +926,7 @@ void kmscon_vte_paste(struct kmscon_vte *vte, const char *u8, size_t len)
 	if (!ghostty_paste_is_safe(u8, len))
 		log_debug("pasting data with unsafe content");
 
-	ghostty_terminal_mode_get(vte->term, GHOSTTY_MODE_BRACKETED_PASTE, &bracketed);
+	bracketed = get_mode(vte, GHOSTTY_MODE_BRACKETED_PASTE);
 
 	buf_len = sizeof(stack_buf);
 	if (ghostty_paste_encode((char *)u8, len, bracketed, buf, buf_len, &written) ==
@@ -2047,12 +2050,12 @@ static GhosttyMods to_ghostty_mods(unsigned int mods)
 
 static void sync_key_encoder(struct kmscon_vte *vte)
 {
-	bool backarrow = false;
+	bool backarrow;
 
 	ghostty_key_encoder_setopt_from_terminal(vte->key_enc, vte->term);
 
-	ghostty_terminal_mode_get(vte->term, GHOSTTY_MODE_BACKARROW_KEY_MODE, &backarrow);
-	backarrow = backarrow || !vte->backspace_sends_delete;
+	backarrow = get_mode(vte, GHOSTTY_MODE_BACKARROW_KEY_MODE) ||
+		    !vte->backspace_sends_delete;
 	ghostty_key_encoder_setopt(vte->key_enc, GHOSTTY_KEY_ENCODER_OPT_BACKARROW_KEY_MODE,
 				   &backarrow);
 }
